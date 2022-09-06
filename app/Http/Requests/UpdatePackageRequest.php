@@ -1,0 +1,33 @@
+<?php
+
+namespace App\Http\Requests;
+
+use App\Package;
+use Gate;
+use Illuminate\Foundation\Http\FormRequest;
+use Symfony\Component\HttpFoundation\Response;
+
+class UpdatePackageRequest extends FormRequest
+{
+    public function authorize()
+    {
+        abort_if(Gate::denies('package_edit'), Response::HTTP_FORBIDDEN, '403 Forbidden');
+
+        return true;
+    }
+
+    public function rules()
+    {
+        return [
+            'price' => [
+                'required',
+            ],
+            'products.*'    => [
+                'integer',
+            ],
+            'products'      => [
+                'array',
+            ],
+        ];
+    }
+}
