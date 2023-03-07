@@ -8,8 +8,10 @@ use App\AccountsGroup;
 use App\Activation;
 use App\ActivationType;
 use App\Asset;
+use App\BVPairingQueue;
 use App\Capital;
 use App\Career;
+use App\Careertype;
 use App\Customer;
 use App\Ledger;
 use App\NetworkFee;
@@ -27,11 +29,951 @@ trait TraitModel
     private $fee_pairing_amount = 5;
     private $id_order_priv = 0;
 
-    public function fee_pairing($order_id, $ref_id, $bv_total, $bvcv_amount, $ref1_fee_point_sale, $ref1_fee_point_upgrade, $ref2_fee_point_sale, $ref2_fee_point_upgrade, $ref1_flush_out, $ledger_id, $cba2, $cbmart, $points_fee_id, $points_upg_id, $ref2_id, $memo, $member_get_flush_out, $package_type, $ref_fee_lev)
+    public function career_type($customer_id)
+    {
+        //init
+        $year = date('Y');
+        $month = date('m');
+        $auto_maintain_bv = 0;
+        //get career def
+        $career_def = Career::select("*")
+            ->where('customer_id', $customer_id)
+            ->orderBy('created_at', 'desc')
+            ->first();
+        if ($career_def) {
+            //get careertypes
+            $careertype_def = Careertype::select("*")
+                ->where('id', $career_def->careertype_id)
+                ->first();
+            //BVPO
+            $bvpo_row = NetworkFee::select('*')
+                ->Where('code', '=', 'BVPO')
+                ->first();
+            $bv_automaintain_amount = $careertype_def->auto_maintain_bv * $bvpo_row->amount;
+            //get current auto maintain
+            $order = Order::select('id')
+                ->where('customers_id', $customer_id)
+                ->where('status', '=', 'approved')
+                ->where('status_delivery', '=', 'received')
+                ->where('bv_automaintain_amount', '>=', $bv_automaintain_amount)
+                ->whereDate('created_at', '=', date('Y-m-d'))
+                // ->whereYear('created_at', '=', $year)
+                // ->whereMonth('created_at', '=', $month)
+                ->first();
+                if (!$order) {
+                    $auto_maintain_bv = $bv_automaintain_amount;
+                }
+        }
+        return $auto_maintain_bv;
+    }
+
+    public function fee_auto_maintain($order_id, $ref_id, $bv_total, $bvcv_amount, $ref1_fee_point_sale, $ref1_fee_point_upgrade, $ref2_fee_point_sale, $ref2_fee_point_upgrade, $ref1_flush_out, $ledger_id, $cba2, $cbmart, $points_fee_id, $points_upg_id, $ref2_id, $memo, $member_get_flush_out, $package_type, $ref_fee_lev, $customer_id)
     {
         //PAIRING
         if ($package_type == 0) {
-            $fee_pairing = $this->pairing($order_id, $ref_id);
+            $fee_auto_maintain = $this->auto_maintain($order_id, $customer_id, $bv_total, $points_fee_id, 0, 0);
+        } else {
+            $fee_auto_maintain = 0;
+        }
+
+        //get netfee_amount
+        $bvcv = (($bvcv_amount) / 100) * $bv_total;
+        $bv_nett = $bv_total - $bvcv;
+        if ($package_type == 0) {
+            $res_netfee_amount = $ref1_fee_point_sale + $ref1_fee_point_upgrade + $ref2_fee_point_sale + $ref2_fee_point_upgrade + $fee_auto_maintain + $ref1_flush_out;
+        } else {
+            $res_netfee_amount = $ref_fee_lev;
+        }
+
+        //set account
+        $acc_points = $this->account_lock_get('acc_points'); //'67'
+        $acc_res_netfee = $this->account_lock_get('acc_res_netfee'); //'70'
+        $acc_res_cashback = $this->account_lock_get('acc_res_cashback');
+        $points_amount = $res_netfee_amount + $cba2 + $cbmart;
+        $accounts = array($acc_points, $acc_res_netfee, $acc_res_cashback);
+        $amounts = array($points_amount, $res_netfee_amount, $cba2 + $cbmart);
+        $types = array('C', 'D', 'D');
+        //order & ledger
+        $order = Order::find($order_id);
+        $ledger = Ledger::find($ledger_id);
+        //ledger entries
+        for ($account = 0; $account < count($accounts); $account++) {
+            if ($accounts[$account] != '') {
+                $ledger->accounts()->attach($accounts[$account], ['entry_type' => $types[$account], 'amount' => $amounts[$account]]);
+            }
+        }
+
+        //set ref1 fee
+        //point sale
+        if ($ref1_fee_point_sale > 0) {
+            $order->points()->attach($points_fee_id, ['amount' => $ref1_fee_point_sale, 'type' => 'D', 'status' => 'onhand', 'memo' => 'Poin Komisi (Refferal) dari ' . $memo, 'customers_id' => $ref_id]);
+        }
+        //point upgrade
+        if ($ref1_fee_point_upgrade > 0) {
+            $order->points()->attach($points_upg_id, ['amount' => $ref1_fee_point_upgrade, 'type' => 'D', 'status' => 'onhand', 'memo' => 'Poin (Upgrade) Komisi (Refferal) dari ' . $memo, 'customers_id' => $ref_id]);
+        }
+
+        //set ref2 fee
+        //point sale
+        if ($ref2_fee_point_sale > 0) {
+            $order->points()->attach($points_fee_id, ['amount' => $ref2_fee_point_sale, 'type' => 'D', 'status' => 'onhand', 'memo' => 'Poin Komisi (Refferal) dari ' . $memo, 'customers_id' => $ref2_id]);
+        }
+        //point upgrade
+        if ($ref2_fee_point_upgrade > 0) {
+            $order->points()->attach($points_upg_id, ['amount' => $ref2_fee_point_upgrade, 'type' => 'D', 'status' => 'onhand', 'memo' => 'Poin (Upgrade) Komisi (Refferal) dari ' . $memo, 'customers_id' => $ref2_id]);
+        }
+        //point flush out
+        if ($ref1_flush_out > 0) {
+            $order->points()->attach($points_fee_id, ['amount' => $ref1_flush_out, 'type' => 'D', 'status' => 'onhand', 'memo' => 'Poin Komisi (Flush Out) dari ' . $memo, 'customers_id' => $member_get_flush_out]);
+        }
+    }
+
+    public function auto_maintain($order_id, $customer_id, $bv_amount, $points_fee_id, $total, $level = 0)
+    {
+        //init
+        $year = date('Y');
+        $month = date('m');
+        //get order def detail
+        $order_def = Order::find($order_id);
+        $customer = Customer::find($order_def->customers_id);
+        $memo = $customer->code . " - " . $customer->name;
+        //get career def
+        $career_def = Career::select("*")
+            ->where('customer_id', $customer->id)
+            ->orderBy('created_at', 'desc')
+            ->first();
+        //get careertypes
+        $careertype_def = Careertype::select("*")
+            ->where('id', $career_def->careertype_id)
+            ->first();
+        //check level
+        if ($level < 10) {
+            //get referal ref_bin_id
+            $referral = Customer::select('*')
+                ->where('id', '=', $customer_id)
+                ->first();
+            //print_r($referral);
+            //echo 'total: '.$total . '<br>';
+            //if ref_bin_id > 1
+            if ($referral->ref_bin_id > 1) {
+                //echo $referral->ref_bin_id . '<br>';
+                //get jenjang karir
+                $career = Career::select("*")
+                    ->where('customer_id', $referral->ref_bin_id)
+                    ->orderBy('created_at', 'desc')
+                    ->first();
+                //if jenjang karir get current auto maintain
+                if ($career) {
+                    //echo 'career: '.$career->careertype_id . '<br>';
+                    //get current auto maintain
+                    $order = Order::select('id')
+                        ->where('customers_id', $referral->ref_bin_id)
+                        ->where('status', '=', 'approved')
+                        ->where('status_delivery', '=', 'received')
+                        ->where('bv_automaintain_amount', '>', 0)
+                        ->whereDate('created_at', '=', date('Y-m-d'))
+                        // ->whereYear('created_at', '=', $year)
+                        // ->whereMonth('created_at', '=', $month)
+                        ->first();
+                    //if qualified
+                    if ($order) {
+                        //set fee
+                        $fee_am = ($careertype_def->fee_am / 100) * $bv_amount;
+                        //echo 'amount' . '-' . $fee_am . '::' . 'type' . '-' . 'D' . '::' . 'status' . '-' . 'onhand' . '::' . 'memo' . '-' . 'Poin Auto Maintain dari Transaksi Member ' . $memo . '::' . 'customers_id' . '-' . $referral->ref_bin_id. '<br>';
+                        $order_def->points()->attach($points_fee_id, ['amount' => $fee_am, 'type' => 'D', 'status' => 'onhand', 'memo' => 'Poin Auto Maintain dari Transaksi Member ' . $memo, 'customers_id' => $referral->ref_bin_id]);
+                        //incr level
+                        $level++;
+                        $total += $fee_am;
+                    }
+                }
+                //if level < 10 recursive
+                if ($level < 10) {
+                    return $this->auto_maintain($order_id, $referral->ref_bin_id, $bv_amount, $points_fee_id, $total, $level);
+                } else {
+                    return $total;
+                }
+            } else {
+                return $total;
+            }
+        } else {
+            return $total;
+        }
+    }
+
+    public function test_pairing_bin($order_id, $customer_id, $bv_amount_inc, $points_fee_id)
+    {
+        //init
+        $fee_out = 0;
+        //get order detail
+        $order = Order::find($order_id);
+        //get member detail
+        $member = Customer::select('activation_type_id', 'slot_x', 'slot_y')
+            ->where('id', $customer_id)
+            ->first();
+        $lev = $member->slot_x - 0;
+        $slot_prev_x = $member->slot_x;
+        $slot_prev_y = $member->slot_y;
+        //BVPO
+        $bvpo_row = NetworkFee::select('*')
+            ->Where('code', '=', 'BVPO')
+            ->first();
+        //get max level
+        $member_pairing_row = NetworkFee::select('*')
+            ->Where('type', '=', 'pairing')
+            ->Where('activation_type_id', '=', $member->activation_type_id)
+            ->first();
+        $pairing_lev_max = $member_pairing_row->deep_level;
+        $lev_count = 1;
+        //loop upline
+        for ($i = 0; $i < $lev; $i++) {
+            $slot_x = $slot_prev_x - 1;
+            $slot_y = ceil($slot_prev_y / 2);
+            //echo $slot_x." - ".$slot_y;
+            //get upline detail
+            $upline = Customer::select('*')
+                ->where('slot_x', $slot_x)
+                ->where('slot_y', $slot_y)
+                ->where('status', 'active')
+                ->where('activation_type_id', '>', 1)
+                ->first();
+            //print_r($upline);
+
+            if ($upline) {
+                //get upline queue
+                $bv_queue = $this->get_bv_queue($upline->id);
+                $bv_pairing_r = $bv_queue['r'];
+                $bv_pairing_l = $bv_queue['l'];
+
+                //get prev position
+                if ($slot_prev_y % 2 == 0) {
+                    $bv_pairing_r += $bv_amount_inc;
+                    $position = 'R';
+                } else {
+                    $bv_pairing_l += $bv_amount_inc;
+                    $position = 'L';
+                }
+                $bv_pairing = $bv_pairing_r;
+                if ($bv_pairing_l < $bv_pairing_r) {
+                    $bv_pairing = $bv_pairing_l;
+                }
+                $bv_pairing = ($bv_pairing - $bv_queue['c']);
+                //compare min pairing
+                //get network fee pairing -> upline activation type
+                $nf_upline_pairing_row = NetworkFee::select('*')
+                    ->Where('type', '=', 'pairing')
+                    ->Where('activation_type_id', '=', $upline->activation_type_id)
+                    ->first();
+                //memo
+                $memo = $upline->code . " - " . $upline->name;
+                //get min bv pairing -> upline activation type
+                $min_bv_pairing = $nf_upline_pairing_row->bv_min_pairing * $bvpo_row->amount;
+                echo $bvpo_row->amount . '-' . $bv_amount_inc . '-' . $upline->code . '-' . $bv_pairing . '-' . $min_bv_pairing . '-' . $upline->status . '-' . $upline->type;
+                // echo '</br>';
+                //check if reach lev max
+                if ($lev_count <= $pairing_lev_max) {
+                    $pairing_sbv = $member_pairing_row->sbv;
+                } else {
+                    $pairing_sbv = $member_pairing_row->sbv2;
+                }
+                //mod bv pairing
+                $bv_pairing_index = floor($bv_pairing / $min_bv_pairing);
+                $bv_pairing = $min_bv_pairing * $bv_pairing_index;
+                if (($bv_pairing >= $min_bv_pairing) && $pairing_sbv > 0) {
+                    if ($upline->status == 'active' && $upline->type != "user") {
+                        $upline_fee_pairing = (($pairing_sbv) / 100) * $bv_pairing;
+                        $upline_amount = $upline_fee_pairing;
+                        //hitung total bv_amount hari ini yang sudah di pairing di tbl pairing {bvarp_paired}
+                        $reg_today = date('Y-m-d');
+                        $daily_amount = $this->get_bv_daily_queue($upline->id, $reg_today);
+                        $daily_amount_paired = $daily_amount + $upline_fee_pairing;
+                        if ($daily_amount_paired <= $nf_upline_pairing_row->fee_day_max) {
+                            $fee_out += (float) $upline_fee_pairing;
+                            $this->fee_pairing_amount += (float) $upline_fee_pairing;
+                            //$order->points()->attach($points_fee_id, ['amount' => $upline_fee_pairing, 'type' => 'D', 'status' => 'onhand', 'memo' => 'Poin Komisi (Pairing) dari group ' . $memo, 'customers_id' => $upline->id]);
+                        } else {
+                            $upline_fee_pairing = $nf_upline_pairing_row->fee_day_max - $daily_amount;
+                            if ($upline_fee_pairing > 0) {
+                                $fee_out += (float) $upline_fee_pairing;
+                                $this->fee_pairing_amount += (float) $upline_fee_pairing;
+                                //$order->points()->attach($points_fee_id, ['amount' => $upline_fee_pairing, 'type' => 'D', 'status' => 'onhand', 'memo' => 'Poin Komisi (Pairing) dari group ' . $memo, 'customers_id' => $upline->id]);
+                            }
+                        }
+                        //insert into tbl queue C
+                        $data = ['order_id' => $order_id, 'customer_id' => $upline->id, 'bv_amount' => $bv_pairing, 'position' => 'N', 'status' => 'active', 'type' => 'C', 'pairing_amount' => $upline_fee_pairing];
+                        //$queue_crt = BVPairingQueue::create($data);
+                    }
+                }
+                //insert into tbl queue D
+                $data = ['order_id' => $order_id, 'customer_id' => $upline->id, 'bv_amount' => $bv_amount_inc, 'position' => $position, 'status' => 'active', 'type' => 'D'];
+                //$queue_crt = BVPairingQueue::create($data);
+            }
+            $lev_count++;
+            //set prev
+            $slot_prev_x = $slot_x;
+            $slot_prev_y = $slot_y;
+        }
+        return $fee_out;
+    }
+
+    public function bugPairing($customer_id, $bv_amount_inc, $position)
+    {
+        $upline = Customer::select('*')
+            ->where('id', $customer_id)
+            ->first();
+
+        if ($upline) {
+            //BVPO
+            $bvpo_row = NetworkFee::select('*')
+                ->Where('code', '=', 'BVPO')
+                ->first();
+
+            //get upline queue
+            $bv_queue = $this->get_bv_queue($upline->id);
+            $bv_pairing_r = $bv_queue['r'];
+            $bv_pairing_l = $bv_queue['l'];
+
+            //get prev position
+            if ($position == 'R') {
+                $bv_pairing_r += $bv_amount_inc;
+            } else {
+                $bv_pairing_l += $bv_amount_inc;
+            }
+            $bv_pairing = $bv_pairing_r;
+            if ($bv_pairing_l < $bv_pairing_r) {
+                $bv_pairing = $bv_pairing_l;
+            }
+            $bv_pairing = ($bv_pairing - $bv_queue['c']);
+            //compare min pairing
+            //get network fee pairing -> upline activation type
+            $nf_upline_pairing_row = NetworkFee::select('*')
+                ->Where('type', '=', 'pairing')
+                ->Where('activation_type_id', '=', $upline->activation_type_id)
+                ->first();
+            //memo
+            $memo = $upline->code . " - " . $upline->name;
+            //get min bv pairing -> upline activation type
+            $min_bv_pairing = $nf_upline_pairing_row->bv_min_pairing * $bvpo_row->amount;
+            //check if reach lev max
+            $pairing_sbv = $nf_upline_pairing_row->sbv;
+
+            if (($bv_pairing >= $min_bv_pairing) && $pairing_sbv > 0) {
+                if ($upline->status == 'active' && $upline->type != "user") {
+                    $upline_fee_pairing = (($pairing_sbv) / 100) * $bv_pairing;
+                    $upline_amount = $upline_fee_pairing;
+                    $reg_today = date('Y-m-d');
+                    $daily_amount = $this->get_bv_daily_queue($upline->id, $reg_today);
+                    $daily_amount_paired = $daily_amount + $upline_fee_pairing;
+                    if ($daily_amount_paired <= $nf_upline_pairing_row->fee_day_max) {
+                        echo '<=' . ' : ' . $daily_amount . ' : ' . $daily_amount_paired . ' : ' . $nf_upline_pairing_row->fee_day_max . ' : ' . $upline_fee_pairing;
+                    } else {
+                        $upline_fee_pairing = $nf_upline_pairing_row->fee_day_max - $daily_amount;
+                        echo '>' . ' : ' . $daily_amount . ' : ' . $daily_amount_paired . ' : ' . $nf_upline_pairing_row->fee_day_max . ' : ' . $upline_fee_pairing;
+                    }
+                }
+            }
+        }
+    }
+
+    public function status_list_upline($slot_x, $slot_y)
+    {
+        $upline_arr['status'] = 0;
+        $upline_arr['x'] = 0;
+        $upline_arr['y'] = 0;
+        $upline_arr['code'] = 0;
+        $upline_arr['name'] = 0;
+        $lev = $slot_x - 0;
+        if ($slot_x == 0 && $slot_y == 1) {
+            $upline_arr['status'] = 1;
+        }
+        for ($i = 0; $i < $lev; $i++) {
+            $slot_x = $slot_x - 1;
+            $slot_y = ceil($slot_y / 2);
+            //get upline detail
+            //check if active & min silver
+            $hu_status = 1;
+            $upline_def = Customer::select('*')
+                ->where('slot_x', $slot_x)
+                ->where('slot_y', $slot_y)
+                ->first();
+            $upline = Customer::select('*')
+                ->where('slot_x', $slot_x)
+                ->where('slot_y', $slot_y)
+                ->where('status', 'active')
+                ->where('activation_type_id', '>', 1)
+                ->first();
+            //check if 3 HU
+            if ($upline) {
+                $users_hu = Customer::select('*')->where('owner_id', $upline->id)->where('ref_bin_id', '>', 0)->get();
+                $hu = count($users_hu);
+                if ($hu >= 3 && $upline->activation_type_id < 3) {
+                    $hu_status = 0;
+                }
+            }
+            $upline_arr['x'] = $slot_x;
+            $upline_arr['y'] = $slot_y;
+            $upline_arr['code'] = 0;
+            $upline_arr['name'] = 0;
+            if ($upline_def) {
+                $upline_arr['code'] = $upline_def->code;
+                $upline_arr['name'] = $upline_def->name;
+            }
+            if (!$upline || $hu_status == 0) {
+                $upline_arr['status'] = 0;
+                break;
+            } else {
+                $upline_arr['status'] = 1;
+            }
+        }
+        return $upline_arr;
+    }
+
+    public function get_downline_total($slot_x, $slot_y, $level_selected, $downline_total)
+    {
+        $slot_selected_x = $slot_x + 1;
+        $slot_selected_y1 = ($slot_y * 2) - 1;
+        $slot_selected_y2 = (($slot_y * 2) - 1) + (pow(2, $level_selected) - 1);
+        //return $slot_selected_x.":".$slot_selected_y1.":".$slot_selected_y2;
+        $customer = Customer::select('id')
+            ->where('ref_bin_id', '>', 0)
+            ->where('type', '=', 'member')
+            ->where('slot_x', '=', $slot_selected_x)
+            ->whereBetween('slot_y', [$slot_selected_y1, $slot_selected_y2])
+            ->get();
+        if (count($customer) > 0) {
+            $level_selected += 1;
+            $downline_total += count($customer);
+            //recursive
+            //echo $downline_total."<br>";
+            return $this->get_downline_total($slot_selected_x, $slot_selected_y1, $level_selected, $downline_total);
+        } else {
+            //echo $downline_total." h <br>";
+            return $downline_total;
+        }
+    }
+
+    public function pairing_bin($order_id, $customer_id, $bv_amount_inc, $points_fee_id)
+    {
+        //init
+        $fee_out = 0;
+        //get order detail
+        $order = Order::find($order_id);
+        //get member detail
+        $member = Customer::select('activation_type_id', 'slot_x', 'slot_y')
+            ->where('id', $customer_id)
+            ->first();
+        $lev = $member->slot_x - 0;
+        $slot_prev_x = $member->slot_x;
+        $slot_prev_y = $member->slot_y;
+        //BVPO
+        $bvpo_row = NetworkFee::select('*')
+            ->Where('code', '=', 'BVPO')
+            ->first();
+        //get max level
+        $member_pairing_row = NetworkFee::select('*')
+            ->Where('type', '=', 'pairing')
+            ->Where('activation_type_id', '=', $member->activation_type_id)
+            ->first();
+        $pairing_lev_max = $member_pairing_row->deep_level;
+        $lev_count = 1;
+        //loop upline
+        for ($i = 0; $i < $lev; $i++) {
+            $slot_x = $slot_prev_x - 1;
+            $slot_y = ceil($slot_prev_y / 2);
+            //echo $slot_x." - ".$slot_y;
+            //get upline detail
+            $upline = Customer::select('*')
+                ->where('slot_x', $slot_x)
+                ->where('slot_y', $slot_y)
+                ->where('status', 'active')
+                ->where('activation_type_id', '>', 1)
+                ->first();
+            //print_r($upline);
+
+            if ($upline) {
+                //get upline queue
+                $bv_queue = $this->get_bv_queue($upline->id);
+                $bv_pairing_r = $bv_queue['r'];
+                $bv_pairing_l = $bv_queue['l'];
+
+                //get prev position
+                if ($slot_prev_y % 2 == 0) {
+                    $bv_pairing_r += $bv_amount_inc;
+                    $position = 'R';
+                } else {
+                    $bv_pairing_l += $bv_amount_inc;
+                    $position = 'L';
+                }
+                $bv_pairing = $bv_pairing_r;
+                if ($bv_pairing_l < $bv_pairing_r) {
+                    $bv_pairing = $bv_pairing_l;
+                }
+                $bv_pairing = ($bv_pairing - $bv_queue['c']);
+                //compare min pairing
+                //get network fee pairing -> upline activation type
+                $nf_upline_pairing_row = NetworkFee::select('*')
+                    ->Where('type', '=', 'pairing')
+                    ->Where('activation_type_id', '=', $upline->activation_type_id)
+                    ->first();
+                //memo
+                $memo = $upline->code . " - " . $upline->name;
+                //get min bv pairing -> upline activation type
+                $min_bv_pairing = $nf_upline_pairing_row->bv_min_pairing * $bvpo_row->amount;
+                // echo $bvpo_row->amount . '-' . $bv_amount_inc . '-' . $upline->code . '-' . $bv_pairing . '-' . $min_bv_pairing . '-' . $upline->status . '-' . $upline->type;
+                // echo '</br>';
+                //check if reach lev max
+                if ($lev_count <= $pairing_lev_max) {
+                    $pairing_sbv = $member_pairing_row->sbv;
+                } else {
+                    $pairing_sbv = $member_pairing_row->sbv2;
+                }
+                //mod bv pairing
+                $bv_pairing_index = floor($bv_pairing / $min_bv_pairing);
+                $bv_pairing = $min_bv_pairing * $bv_pairing_index;
+                if (($bv_pairing >= $min_bv_pairing) && $pairing_sbv > 0) {
+                    if ($upline->status == 'active' && $upline->type != "user") {
+                        $upline_fee_pairing = (($pairing_sbv) / 100) * $bv_pairing;
+                        $upline_amount = $upline_fee_pairing;
+                        //hitung total bv_amount hari ini yang sudah di pairing di tbl pairing {bvarp_paired}
+                        $reg_today = date('Y-m-d');
+                        $daily_amount = $this->get_bv_daily_queue($upline->id, $reg_today);
+                        $daily_amount_paired = $daily_amount + $upline_fee_pairing;
+                        if ($daily_amount_paired <= $nf_upline_pairing_row->fee_day_max) {
+                            $fee_out += (float) $upline_fee_pairing;
+                            $this->fee_pairing_amount += (float) $upline_fee_pairing;
+                            $order->points()->attach($points_fee_id, ['amount' => $upline_fee_pairing, 'type' => 'D', 'status' => 'onhand', 'memo' => 'Poin Komisi (Pairing) dari group ' . $memo, 'customers_id' => $upline->id]);
+                        } else {
+                            $upline_fee_pairing = $nf_upline_pairing_row->fee_day_max - $daily_amount;
+                            if ($upline_fee_pairing > 0) {
+                                $fee_out += (float) $upline_fee_pairing;
+                                $this->fee_pairing_amount += (float) $upline_fee_pairing;
+                                $order->points()->attach($points_fee_id, ['amount' => $upline_fee_pairing, 'type' => 'D', 'status' => 'onhand', 'memo' => 'Poin Komisi (Pairing) dari group ' . $memo, 'customers_id' => $upline->id]);
+                            }
+                        }
+                        //insert into tbl queue C
+                        $data = ['order_id' => $order_id, 'customer_id' => $upline->id, 'bv_amount' => $bv_pairing, 'position' => 'N', 'status' => 'active', 'type' => 'C', 'pairing_amount' => $upline_fee_pairing];
+                        $queue_crt = BVPairingQueue::create($data);
+                    }
+                }
+                //insert into tbl queue D
+                $data = ['order_id' => $order_id, 'customer_id' => $upline->id, 'bv_amount' => $bv_amount_inc, 'position' => $position, 'status' => 'active', 'type' => 'D'];
+                $queue_crt = BVPairingQueue::create($data);
+            }
+            $lev_count++;
+            //set prev
+            $slot_prev_x = $slot_x;
+            $slot_prev_y = $slot_y;
+        }
+        return $fee_out;
+    }
+
+    public function get_bv_daily_queue($customer_id, $reg_today)
+    {
+        $queue_c = BVPairingQueue::selectRaw("sum(pairing_amount) as total")
+            ->where('customer_id', $customer_id)
+            ->where('status', 'active')
+            ->where('type', 'C')
+            ->whereDate('created_at', '=', $reg_today)
+            ->groupBy('customer_id')
+            ->first();
+        if ($queue_c) {
+            return $queue_c->total;
+        } else {
+            return 0;
+        }
+    }
+
+    public function get_bv_queue($customer_id)
+    {
+        //get upline detail
+        $queue_l = BVPairingQueue::selectRaw("sum(bv_amount) as total")
+            ->where('customer_id', $customer_id)
+            ->where('position', 'L')
+            ->where('status', 'active')
+            ->where('type', 'D')
+            ->groupBy('customer_id')
+            ->first();
+        $queue_r = BVPairingQueue::selectRaw("sum(bv_amount) as total")
+            ->where('customer_id', $customer_id)
+            ->where('position', 'R')
+            ->where('status', 'active')
+            ->where('type', 'D')
+            ->groupBy('customer_id')
+            ->first();
+        $queue_c = BVPairingQueue::selectRaw("sum(bv_amount) as total")
+            ->where('customer_id', $customer_id)
+            ->where('status', 'active')
+            ->where('type', 'C')
+            ->groupBy('customer_id')
+            ->first();
+        $queue_c_count = BVPairingQueue::where('customer_id', $customer_id)
+            ->where('status', 'active')
+            ->where('type', 'C')
+            ->count();
+        if ($queue_l) {
+            $queue_arr['l'] = $queue_l->total;
+        } else {
+            $queue_arr['l'] = 0;
+        }
+        if ($queue_r) {
+            $queue_arr['r'] = $queue_r->total;
+        } else {
+            $queue_arr['r'] = 0;
+        }
+        if ($queue_c) {
+            $queue_arr['c'] = $queue_c->total;
+        } else {
+            $queue_arr['c'] = 0;
+        }
+        $queue_arr['c_count'] = $queue_c_count;
+
+        return $queue_arr;
+    }
+
+    public function ins_bv_upline($order_id, $customer_id, $bv_amount, $type, $position_init = 1)
+    {
+        //get member detail
+        $member = Customer::select('slot_x', 'slot_y')
+            ->where('id', $customer_id)
+            ->first();
+        $lev = $member->slot_x - 0;
+        $slot_prev_y = $member->slot_y;
+        //loop upline
+        for ($i = 0; $i < $lev; $i++) {
+            $slot_x = $member->slot_x - 1;
+            $slot_y = ceil($member->slot_y / 2);
+            //get position
+            if ($position_init == 1) {
+                $position = 'L';
+                if ($slot_prev_y % 2 == 0) {
+                    $position = 'R';
+                }} else {
+                $position = 'N';
+            }
+            $slot_prev_y = $slot_y;
+            //get upline detail
+            $upline = Customer::select("id")
+                ->where('slot_x', $slot_x)
+                ->where('slot_y', $slot_y)
+                ->where('status', 'active')
+                ->first();
+            if ($upline) {
+                //insert
+                $data = ['order_id' => $order_id, 'customer_id' => $upline->id, 'bv_amount' => $bv_amount, 'position' => $position, 'status' => 'active', 'type' => $type];
+                $queue_crt = BVPairingQueue::create($data);
+            }
+        }
+    }
+
+    public function group_bv_amount($slot_x, $slot_y, $level_selected, $id_order_inc, $balance, $balance_ro)
+    {
+        if ($level_selected == 1) {
+            //get top member
+            $top_line = Customer::select('id')
+                ->where('ref_bin_id', '>', 0)
+                ->where('type', '=', 'member')
+                ->where('slot_x', '=', $slot_x)
+                ->where('slot_y', '=', $slot_y)
+                ->first();
+            $date_start_bin = "2022-11-10" . " 00:00:01";
+            $balance += Order::where('customers_activation_id', '=', $top_line->id)
+                ->where('type', '=', 'activation_member')
+                ->where('created_at', '>=', $date_start_bin)
+                ->where(function ($query) use ($id_order_inc) {
+                    $query->where('status', '=', 'approved')
+                        ->orWhere('id', '=', $id_order_inc);
+                })
+                ->sum('bv_activation_amount');
+            $balance_ro += Order::where('customers_id', '=', $top_line->id)
+                ->where('type', '=', 'agent_sale')
+                ->where('created_at', '>=', $date_start_bin)
+                ->where(function ($query) use ($id_order_inc) {
+                    $query->where('status', '=', 'approved')
+                        ->orWhere('id', '=', $id_order_inc);
+                })
+                ->sum('bv_ro_amount');
+        }
+        //get list on selected level
+        $slot_selected_x = $slot_x + 1;
+        $slot_selected_y1 = ($slot_y * 2) - 1;
+        $slot_selected_y2 = (($slot_y * 2) - 1) + (pow(2, $level_selected) - 1);
+        $customer_list = Customer::selectRaw('customers.id')
+            ->join('orders', function ($join) use ($id_order_inc) {
+                $join->on('orders.customers_activation_id', '=', 'customers.id')
+                    ->where('orders.type', '=', 'activation_member')
+                    ->where(function ($query) use ($id_order_inc) {
+                        $query->where('orders.status', '=', 'approved')
+                            ->orWhere('orders.id', '=', $id_order_inc);
+                    });
+            })
+            ->where('customers.ref_bin_id', '>', 0)
+            ->where('customers.type', '=', 'member')
+            ->where('customers.slot_x', '=', $slot_selected_x)
+            ->whereBetween('customers.slot_y', [$slot_selected_y1, $slot_selected_y2])
+            ->groupBy('customers.id')
+            ->get();
+        if ($customer_list) {
+            $level_selected += 1;
+            // foreach ($customer_list as $customer) {
+            //     //get bv_activation_bin_amount
+            //     $balance += Order::where('customers_activation_id', '=', $customer->id)
+            //         ->where('type', '=', 'activation_member')
+            //         ->where(function ($query) use ($id_order_inc) {
+            //             $query->where('status', '=', 'approved')
+            //                 ->orWhere('id', '=', $id_order_inc);
+            //         })
+            //         ->sum('bv_activation_bin_amount');
+            //     $balance_ro += Order::where('customers_id', '=', $customer->id)
+            //         ->where('type', '=', 'agent_sale')
+            //         ->where(function ($query) use ($id_order_inc) {
+            //             $query->where('status', '=', 'approved')
+            //                 ->orWhere('id', '=', $id_order_inc);
+            //         })
+            //         ->sum('bv_ro_bin_amount');
+            // }
+            return $this->group_bv_amount($slot_selected_x, $slot_selected_y1, $level_selected, $id_order_inc, $balance, $balance_ro);
+        } else {
+            // $balance_arr[0]['balance'] = $balance;
+            // $balance_arr[0]['balance_ro'] = $balance_ro;
+            // return $balance_arr;
+            return $level_selected;
+        }
+
+    }
+
+    public function get_list_upline($slot_x, $slot_y)
+    {
+        $upline_arr = array();
+        $lev = $slot_x - 0;
+        for ($i = 0; $i < $lev; $i++) {
+            $slot_x = $slot_x - 1;
+            $slot_y = ceil($slot_y / 2);
+            //get upline detail
+            $upline = Customer::select('code')
+                ->where('slot_x', $slot_x)
+                ->where('slot_y', $slot_y)
+                ->first();
+            $upline_arr[$i]['x'] = $slot_x;
+            $upline_arr[$i]['y'] = $slot_y;
+            if ($upline) {
+                $upline_arr[$i]['code'] = $upline->code;
+            } else {
+                $upline_arr[$i]['code'] = 0;
+            }
+        }
+        return $upline_arr;
+    }
+
+    public function group_if_lr($group_slot_x, $group_slot_y, $slot_x, $slot_y)
+    {
+        $lev = $slot_x - $group_slot_x;
+        $slot_lr_x = $slot_x - $lev + 1;
+        $slot_lr_y = $slot_y;
+        for ($i = 1; $i < $lev; $i++) {
+            $slot_lr_y = ceil($slot_lr_y / 2);
+        }
+        $slot_lr_arr['x'] = $slot_lr_x;
+        $slot_lr_arr['y'] = $slot_lr_y;
+        return $slot_lr_arr;
+    }
+
+    public function get_slot_empty_3hu($slot_x, $slot_y, $level_selected, $slot_arr)
+    {
+        $slot_selected_x = $slot_x + 1;
+        $slot_selected_y1 = ($slot_y * 2) - 1;
+        $slot_selected_y2 = (($slot_y * 2) - 1) + (pow(2, $level_selected) - 1);
+        //return $slot_selected_x.":".$slot_selected_y1.":".$slot_selected_y2;
+        $customer = Customer::select('id')
+            ->where('ref_bin_id', '>', 0)
+            ->where('type', '=', 'member')
+            ->where('slot_x', '=', $slot_selected_x)
+            ->whereBetween('slot_y', [$slot_selected_y1, $slot_selected_y2])
+            ->first();
+        if ($customer) {
+            //loop to get empty on active slot
+            $slot_empty_status = 0;
+            $slot_empty_x = $slot_selected_x;
+            $slot_empty_y = 0;
+            for ($i = $slot_selected_y1; $i <= $slot_selected_y2; $i++) {
+                $slot_exist = Customer::select('id')
+                    ->where('ref_bin_id', '>', 0)
+                    ->where('type', '=', 'member')
+                    ->where('slot_x', '=', $slot_selected_x)
+                    ->where('slot_y', '=', $i)
+                    ->first();
+                if (!$slot_exist) {
+                    //check left and right
+                    $slot_left_x = $slot_selected_x + 1;
+                    $slot_right_x = $slot_selected_x + 1;
+                    $slot_left_y = ($i * 2) - 1;
+                    $slot_right_y = $i * 2;
+                    $slot_left_exist = Customer::select('id')
+                        ->where('ref_bin_id', '>', 0)
+                        ->where('type', '=', 'member')
+                        ->where('slot_x', '=', $slot_left_x)
+                        ->where('slot_y', '=', $slot_left_y)
+                        ->first();
+                    $slot_right_exist = Customer::select('id')
+                        ->where('ref_bin_id', '>', 0)
+                        ->where('type', '=', 'member')
+                        ->where('slot_x', '=', $slot_right_x)
+                        ->where('slot_y', '=', $slot_right_y)
+                        ->first();
+                    //if left right empty
+                    if (!$slot_left_exist && !$slot_right_exist) {
+                        $slot_empty_status = 1;
+                        $slot_empty_y = $i;
+                        break;
+                    }
+                }
+            }
+            if ($slot_empty_status == 0) {
+                //looking for next level
+                $level_selected += 1;
+                return $this->get_slot_empty_3hu($slot_selected_x, $slot_selected_y1, $level_selected, $slot_arr);
+            } else {
+                $slot_prev_x = $slot_empty_x - 1;
+                $slot_prev_y = ceil($slot_empty_y / 2);
+                $slot_arr['x'] = $slot_prev_x;
+                $slot_arr['y'] = $slot_prev_y;
+                return $slot_arr;
+            }
+
+        } else {
+            $slot_prev_x = $slot_selected_x - 1;
+            $slot_prev_y = ceil($slot_selected_y1 / 2);
+            $slot_arr['x'] = $slot_prev_x;
+            $slot_arr['y'] = $slot_prev_y;
+            return $slot_arr;
+        }
+    }
+
+    public function get_slot_empty($slot_x, $slot_y, $level_selected, $slot_arr)
+    {
+        $slot_selected_x = $slot_x + 1;
+        $slot_selected_y1 = ($slot_y * 2) - 1;
+        $slot_selected_y2 = (($slot_y * 2) - 1) + (pow(2, $level_selected) - 1);
+        //return $slot_selected_x.":".$slot_selected_y1.":".$slot_selected_y2;
+        $customer = Customer::select('id')
+            ->where('ref_bin_id', '>', 0)
+            ->where('type', '=', 'member')
+            ->where('slot_x', '=', $slot_selected_x)
+            ->whereBetween('slot_y', [$slot_selected_y1, $slot_selected_y2])
+            ->first();
+        if ($customer) {
+            //loop to get empty on active slot
+            $slot_empty_status = 0;
+            $slot_empty_x = $slot_selected_x;
+            $slot_empty_y = 0;
+            for ($i = $slot_selected_y1; $i <= $slot_selected_y2; $i++) {
+                $slot_exist = Customer::select('id')
+                    ->where('ref_bin_id', '>', 0)
+                    ->where('type', '=', 'member')
+                    ->where('slot_x', '=', $slot_selected_x)
+                    ->where('slot_y', '=', $i)
+                    ->first();
+                if (!$slot_exist) {
+                    $slot_empty_status = 1;
+                    $slot_empty_y = $i;
+                    break;
+                }
+            }
+            if ($slot_empty_status == 0) {
+                //looking for next level
+                $level_selected += 1;
+                return $this->get_slot_empty($slot_selected_x, $slot_selected_y1, $level_selected, $slot_arr);
+            } else {
+                $slot_prev_x = $slot_empty_x - 1;
+                $slot_prev_y = ceil($slot_empty_y / 2);
+                $slot_arr['x'] = $slot_prev_x;
+                $slot_arr['y'] = $slot_prev_y;
+                $slot_arr['ex'] = $slot_empty_x;
+                $slot_arr['ey'] = $slot_empty_y;
+                return $slot_arr;
+            }
+
+        } else {
+            $slot_prev_x = $slot_selected_x - 1;
+            $slot_prev_y = ceil($slot_selected_y1 / 2);
+            $slot_arr['x'] = $slot_prev_x;
+            $slot_arr['y'] = $slot_prev_y;
+            $slot_arr['ex'] = $slot_selected_x;
+            $slot_arr['ey'] = $slot_selected_y1;
+            return $slot_arr;
+        }
+    }
+
+    public function get_level_total($slot_x, $slot_y, $level_selected, $level_total)
+    {
+        $slot_selected_x = $slot_x + 1;
+        $slot_selected_y1 = ($slot_y * 2) - 1;
+        $slot_selected_y2 = (($slot_y * 2) - 1) + (pow(2, $level_selected) - 1);
+        //return $slot_selected_x.":".$slot_selected_y1.":".$slot_selected_y2;
+        $customer = Customer::select('id')
+            ->where('ref_bin_id', '>', 0)
+            ->where('type', '=', 'member')
+            ->where('slot_x', '=', $slot_selected_x)
+            ->whereBetween('slot_y', [$slot_selected_y1, $slot_selected_y2])
+            ->first();
+        if ($customer) {
+            $level_selected += 1;
+            $level_total += 1;
+            //recursive
+            //echo $level_total."<br>";
+            return $this->get_level_total($slot_selected_x, $slot_selected_y1, $level_selected, $level_total);
+        } else {
+            //echo $level_total." h <br>";
+            return $level_total;
+        }
+    }
+
+    public function downline_tree_bin($ref_id, $down_arr, $status, $slot_x, $slot_y, $top_id)
+    {
+        if ($status == "yes") {
+            $customer = Customer::select('activation_type_id', 'id', 'code', 'name', 'address', 'slot_x', 'slot_y')
+                ->where('id', $ref_id)
+                ->where('status', '=', 'active')
+                ->where('type', '=', 'member')
+                ->where('slot_x', '>', 0)
+                ->with('activations')
+                ->first();
+        } else if ($status == "no") {
+            $customer = Customer::select('activation_type_id', 'id', 'code', 'name', 'address', 'slot_x', 'slot_y')
+                ->where('id', $ref_id)
+                ->where('status', '=', 'active')
+                ->where('type', '=', 'member')
+                ->where('slot_x', '=', null)
+                ->with('activations')
+                ->first();
+        } else {
+            $customer = Customer::select('activation_type_id', 'id', 'code', 'name', 'address', 'slot_x', 'slot_y')
+                ->where('id', $ref_id)
+                ->where('status', '=', 'active')
+                ->where('type', '=', 'member')
+                ->with('activations')
+                ->first();
+        }
+        if ($customer) {
+            $array_adj = array('id' => $customer->id, 'name' => $customer->name, 'code' => $customer->code, 'type' => $customer->activations->name, 'slot_x' => $customer->slot_x, 'slot_y' => $customer->slot_y, 'slot_set_x' => $slot_x, 'slot_set_y' => $slot_y, 'top_id' => $top_id, 'address' => $customer->address);
+            array_push($down_arr, $array_adj);
+        }
+        $downref_list = Customer::select('id')
+            ->where('ref_id', $ref_id)
+            ->where('status', '=', 'active')
+            ->where('type', '=', 'member')
+            ->orderBy('activation_at', 'asc')
+            ->get();
+        foreach ($downref_list as $downline) {
+            $down_arr = $this->downline_tree($downline->id, $down_arr, $status, $slot_x, $slot_y, $top_id);
+        }
+        return $down_arr;
+    }
+
+    public function fee_pairing($order_id, $ref_id, $bv_total, $bvcv_amount, $ref1_fee_point_sale, $ref1_fee_point_upgrade, $ref2_fee_point_sale, $ref2_fee_point_upgrade, $ref1_flush_out, $ledger_id, $cba2, $cbmart, $points_fee_id, $points_upg_id, $ref2_id, $memo, $member_get_flush_out, $package_type, $ref_fee_lev, $customer_id)
+    {
+        //PAIRING
+        if ($package_type == 0) {
+            //$fee_pairing = $this->pairing($order_id, $ref_id);
+            $fee_pairing = $this->pairing_bin($order_id, $customer_id, $bv_total, $points_fee_id);
         } else {
             $fee_pairing = 0;
         }
@@ -66,25 +1008,25 @@ trait TraitModel
         //set ref1 fee
         //point sale
         if ($ref1_fee_point_sale > 0) {
-            $order->points()->attach($points_fee_id, ['amount' => $ref1_fee_point_sale, 'type' => 'D', 'status' => 'onhold', 'memo' => 'Poin Komisi (Refferal) dari ' . $memo, 'customers_id' => $ref_id]);
+            $order->points()->attach($points_fee_id, ['amount' => $ref1_fee_point_sale, 'type' => 'D', 'status' => 'onhand', 'memo' => 'Poin Komisi (Refferal) dari ' . $memo, 'customers_id' => $ref_id]);
         }
         //point upgrade
         if ($ref1_fee_point_upgrade > 0) {
-            $order->points()->attach($points_upg_id, ['amount' => $ref1_fee_point_upgrade, 'type' => 'D', 'status' => 'onhold', 'memo' => 'Poin (Upgrade) Komisi (Refferal) dari ' . $memo, 'customers_id' => $ref_id]);
+            $order->points()->attach($points_upg_id, ['amount' => $ref1_fee_point_upgrade, 'type' => 'D', 'status' => 'onhand', 'memo' => 'Poin (Upgrade) Komisi (Refferal) dari ' . $memo, 'customers_id' => $ref_id]);
         }
 
         //set ref2 fee
         //point sale
         if ($ref2_fee_point_sale > 0) {
-            $order->points()->attach($points_fee_id, ['amount' => $ref2_fee_point_sale, 'type' => 'D', 'status' => 'onhold', 'memo' => 'Poin Komisi (Refferal) dari ' . $memo, 'customers_id' => $ref2_id]);
+            $order->points()->attach($points_fee_id, ['amount' => $ref2_fee_point_sale, 'type' => 'D', 'status' => 'onhand', 'memo' => 'Poin Komisi (Refferal) dari ' . $memo, 'customers_id' => $ref2_id]);
         }
         //point upgrade
         if ($ref2_fee_point_upgrade > 0) {
-            $order->points()->attach($points_upg_id, ['amount' => $ref2_fee_point_upgrade, 'type' => 'D', 'status' => 'onhold', 'memo' => 'Poin (Upgrade) Komisi (Refferal) dari ' . $memo, 'customers_id' => $ref2_id]);
+            $order->points()->attach($points_upg_id, ['amount' => $ref2_fee_point_upgrade, 'type' => 'D', 'status' => 'onhand', 'memo' => 'Poin (Upgrade) Komisi (Refferal) dari ' . $memo, 'customers_id' => $ref2_id]);
         }
         //point flush out
         if ($ref1_flush_out > 0) {
-            $order->points()->attach($points_fee_id, ['amount' => $ref1_flush_out, 'type' => 'D', 'status' => 'onhold', 'memo' => 'Poin Komisi (Flush Out) dari ' . $memo, 'customers_id' => $member_get_flush_out]);
+            $order->points()->attach($points_fee_id, ['amount' => $ref1_flush_out, 'type' => 'D', 'status' => 'onhand', 'memo' => 'Poin Komisi (Flush Out) dari ' . $memo, 'customers_id' => $member_get_flush_out]);
         }
     }
 
@@ -277,22 +1219,66 @@ trait TraitModel
         return $members;
     }
 
-    public function downline_tree($ref_id, $down_arr)
+    public function downline_tree($ref_bin_id, $down_arr)
     {
         $bv_activation_amount_total = 0;
         $customer = Customer::select('id', 'code', 'name')
-            ->where('id', $ref_id)
+            ->where('id', $ref_bin_id)
             ->where('status', '=', 'active')
             ->first();
-        $array_adj = array('id' => $customer->id, 'name' => $customer->name, 'code' => $customer->code);
-        array_push($down_arr, $array_adj);
+        if ($customer) {
+            $array_adj = array('id' => $customer->id, 'name' => $customer->name, 'code' => $customer->code);
+            array_push($down_arr, $array_adj);
+        }
         $downref_list = Customer::select('id')
-            ->where('ref_id', $ref_id)
+            ->where('ref_bin_id', $ref_bin_id)
             ->where('status', '=', 'active')
             ->orderBy('activation_at', 'asc')
             ->get();
         foreach ($downref_list as $downline) {
             $down_arr = $this->downline_tree($downline->id, $down_arr);
+        }
+        return $down_arr;
+    }
+
+    public function downline_tree2($ref_id, $down_arr, $status, $slot_x, $slot_y, $top_id)
+    {
+        if ($status == "yes") {
+            $customer = Customer::select('activation_type_id', 'id', 'code', 'name', 'address', 'slot_x', 'slot_y')
+                ->where('id', $ref_id)
+                ->where('status', '=', 'active')
+                ->where('type', '=', 'member')
+                ->where('slot_x', '>', 0)
+                ->with('activations')
+                ->first();
+        } else if ($status == "no") {
+            $customer = Customer::select('activation_type_id', 'id', 'code', 'name', 'address', 'slot_x', 'slot_y')
+                ->where('id', $ref_id)
+                ->where('status', '=', 'active')
+                ->where('type', '=', 'member')
+                ->where('slot_x', '=', null)
+                ->with('activations')
+                ->first();
+        } else {
+            $customer = Customer::select('activation_type_id', 'id', 'code', 'name', 'address', 'slot_x', 'slot_y')
+                ->where('id', $ref_id)
+                ->where('status', '=', 'active')
+                ->where('type', '=', 'member')
+                ->with('activations')
+                ->first();
+        }
+        if ($customer) {
+            $array_adj = array('id' => $customer->id, 'name' => $customer->name, 'code' => $customer->code, 'type' => $customer->activations->name, 'slot_x' => $customer->slot_x, 'slot_y' => $customer->slot_y, 'slot_set_x' => $slot_x, 'slot_set_y' => $slot_y, 'top_id' => $top_id, 'address' => $customer->address);
+            array_push($down_arr, $array_adj);
+        }
+        $downref_list = Customer::select('id')
+            ->where('ref_id', $ref_id)
+            ->where('status', '=', 'active')
+            ->where('type', '=', 'member')
+            ->orderBy('activation_at', 'asc')
+            ->get();
+        foreach ($downref_list as $downline) {
+            $down_arr = $this->downline_tree2($downline->id, $down_arr, $status, $slot_x, $slot_y, $top_id);
         }
         return $down_arr;
     }
@@ -716,7 +1702,7 @@ trait TraitModel
             ->where('status', '=', 'active')
             ->orderBy("activation_at", "desc")
             ->first();
-        if (empty($member_last_row) || $member_row->ref_id == 0) {
+        if (!empty($member_row) && (empty($member_last_row) || $member_row->ref_id == 0)) {
             $id = $ref_id;
         } else {
             $id = $member_last_row->id;
@@ -738,6 +1724,17 @@ trait TraitModel
 
     public function get_last_code($type)
     {
+        if ($type == "stock_trsf") {
+            $account = Order::where('type', 'stock_trsf')
+                ->orderBy('id', 'desc')
+                ->first();
+            if ($account && (strlen($account->code) == 8)) {
+                $code = $account->code;
+            } else {
+                $code = acc_codedef_generate('TSA', 8);
+            }
+        }
+
         if ($type == "convert") {
             $account = Order::where('type', 'point_conversion')
                 ->orderBy('id', 'desc')

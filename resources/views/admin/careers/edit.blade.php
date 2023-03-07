@@ -54,32 +54,6 @@
                     {{ trans('global.careertype.fields.ro_min_bv_helper') }}
                 </p>
             </div>
-
-            <div class="form-group {{ $errors->has('auto_maintain_bv') ? 'has-error' : '' }}">
-                <label for="auto_maintain_bv">{{ trans('global.careertype.fields.auto_maintain_bv') }}</label>
-                <input type="number" id="auto_maintain_bv" name="auto_maintain_bv" class="form-control" value="{{ old('auto_maintain_bv', isset($careertype) ? $careertype->auto_maintain_bv : '') }}">
-                @if($errors->has('auto_maintain_bv'))
-                    <em class="invalid-feedback">
-                        {{ $errors->first('auto_maintain_bv') }}
-                    </em>
-                @endif
-                <p class="helper-block">
-                    {{ trans('global.careertype.fields.auto_maintain_bv_helper') }}
-                </p>
-            </div>
-            <div class="form-group {{ $errors->has('fee_am') ? 'has-error' : '' }}">
-                <label for="fee_am">{{ trans('global.careertype.fields.fee_am') }}</label>
-                <input type="number" id="fee_am" name="fee_am" class="form-control" value="{{ old('fee_am', isset($careertype) ? $careertype->fee_am : '') }}">
-                @if($errors->has('fee_am'))
-                    <em class="invalid-feedback">
-                        {{ $errors->first('fee_am') }}
-                    </em>
-                @endif
-                <p class="helper-block">
-                    {{ trans('global.careertype.fields.fee_am_helper') }}
-                </p>
-            </div>
-
             <div class="form-group {{ $errors->has('fee_min') ? 'has-error' : '' }}">
                 <label for="fee_min">{{ trans('global.careertype.fields.fee_min') }}</label>
                 <input type="number" id="fee_min" name="fee_min" class="form-control" value="{{ old('fee_min', isset($careertype) ? $careertype->fee_min : '') }}">

@@ -38,6 +38,7 @@ Route::group(['prefix' => 'open', 'namespace' => 'Api\V1\Admin'], function () {
     Route::get('/agents', 'CustomersApiController@agentsOpen');
     Route::get('/test', 'CustomersApiController@test');
     Route::get('/location', 'CustomersApiController@location');
+    Route::get('/login-switch', 'CustomersApiController@loginSwitch');
 });
 
 Route::group(['prefix' => 'close', 'namespace' => 'Api\V1\Admin', 'middleware' => 'auth:api'], function () {
@@ -69,6 +70,7 @@ Route::group(['prefix' => 'close', 'namespace' => 'Api\V1\Admin', 'middleware' =
     Route::post('activate-agent', 'CustomersApiController@activateAgent');
     Route::post('withdraw', 'TopupsApiController@withdraw');
     Route::get('downline/{id}', 'CustomersApiController@downline');
+    Route::get('downline-agent/{id}', 'CustomersApiController@downlineAgent');
     Route::post('/register-downline', 'CustomersApiController@registerDownline');
     Route::get('order-agent-process/{id}', 'OrdersApiController@orderAgentProcess');
     Route::get('order-cancel/{id}', 'OrdersApiController@orderCancel');
@@ -113,6 +115,25 @@ Route::group(['prefix' => 'close', 'namespace' => 'Api\V1\Admin', 'middleware' =
 
     //career
     Route::get('/careertypes-list', 'CareertypesApiController@lists');
+
+    Route::get('/agent-list', 'CustomersApiController@agentlist');
+    Route::post('transfer-stock', 'OrdersApiController@transferStock');
+    Route::get('members-hu', 'CustomersApiController@membersHu');
+    Route::get('/products-member-package', 'ProductsApiController@indexMemberPackage');
+    Route::get('/activation-type-detail', 'ProductsApiController@activationTypeDetail');
+    Route::get('slot-tree', 'CustomersApiController@slotTree');
+    Route::get('slot-empty', 'CustomersApiController@slotEmpty');
+    Route::get('slot-if-lr', 'CustomersApiController@slotIfLR');
+    Route::get('slot-list-up', 'CustomersApiController@slotListUp');
+    Route::get('group-lr-amount', 'CustomersApiController@groupLRAmount');
+    Route::get('net-info', 'CustomersApiController@net_info');
+    Route::get('pairing-info', 'CustomersApiController@pairing_info');
+    Route::get('status-list-up', 'CustomersApiController@statusListUp');
+    Route::get('pairing-test', 'CustomersApiController@testPairing');
+
+    //automaintain
+    Route::post('automaintain', 'OrdersApiController@automaintain');
+    Route::get('auto-maintain', 'CustomersApiController@getAutoMaintain');
 
     //test
     Route::get('test/{id}', 'OrdersApiController@test');

@@ -25,6 +25,8 @@ class Careertype extends Model
         'ref_downline_num',
         'ref_downline_id',
         'team_level',
+        'auto_maintain_bv',
+        'fee_am',
     ];
     
     public function activations()

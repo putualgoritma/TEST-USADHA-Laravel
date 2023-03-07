@@ -110,6 +110,7 @@
                     {{ trans('global.networkfee.fields.activation_type_id_helper') }}
                 </p>
             </div>
+
             <div class="form-group {{ $errors->has('sbv') ? 'has-error' : '' }}">
                 <label for="sbv">{{ trans('global.networkfee.fields.sbv') }}</label>
                 <input type="text" id="sbv" name="sbv" class="form-control" value="{{ old('sbv', isset($networkfee) ? $networkfee->sbv : '0') }}">
@@ -122,6 +123,20 @@
                     {{ trans('global.networkfee.fields.sbv_helper') }}
                 </p>
             </div>
+
+            <div class="form-group {{ $errors->has('sbv2') ? 'has-error' : '' }}">
+                <label for="sbv2">{{ trans('global.networkfee.fields.sbv2') }}</label>
+                <input type="text" id="sbv2" name="sbv2" class="form-control" value="{{ old('sbv2', isset($networkfee) ? $networkfee->sbv2 : '0') }}">
+                @if($errors->has('sbv2'))
+                    <em class="invalid-feedback">
+                        {{ $errors->first('sbv2') }}
+                    </em>
+                @endif
+                <p class="helper-block">
+                    {{ trans('global.networkfee.fields.sbv2_helper') }}
+                </p>
+            </div>
+
             <div class="form-group {{ $errors->has('saving') ? 'has-error' : '' }}">
                 <label for="saving">{{ trans('global.networkfee.fields.saving') }}*</label>
                 <select name="saving" class="form-control">

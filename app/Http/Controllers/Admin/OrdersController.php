@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Account;
+use App\BVPairingQueue;
 use App\Customer;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\StoreOrderRequest;
@@ -10,7 +11,9 @@ use App\Http\Requests\UpdateOrderRequest;
 use App\Ledger;
 use App\NetworkFee;
 use App\Order;
+use App\OrderPoint;
 use App\Package;
+use App\Pairing;
 use App\Product;
 use App\Traits\TraitModel;
 use Berkayk\OneSignal\OneSignalClient;
@@ -19,8 +22,6 @@ use Gate;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Yajra\DataTables\Facades\DataTables;
-use App\Pairing;
-use App\OrderPoint;
 
 class OrdersController extends Controller
 {
@@ -86,15 +87,36 @@ class OrdersController extends Controller
     {
         abort_if(Gate::denies('order_access'), Response::HTTP_FORBIDDEN, '403 Forbidden');
 
-        $orderpoints = OrderPoint::where('orders_id', $request->_id)
-            ->where('status', 'onhold')
-            ->get();
-        foreach ($orderpoints as $key => $orderpoint) {
-            $orderpoint_upd = OrderPoint::find($orderpoint->id);
-            $orderpoint_upd->status = 'onhand';
-            $orderpoint_upd->save();
+        $order = Order::find($request->_id);
+        if ($order->status == 'approved' && $order->status_delivery == 'received') {
+            //update point
+            $orderpoints = OrderPoint::where('orders_id', $request->_id)->get();
+            foreach ($orderpoints as $key => $orderpoint) {
+                $orderpoint_upd = OrderPoint::find($orderpoint->id);
+                $orderpoint_upd->status = 'onhand';
+                $orderpoint_upd->save();
+            }
+            //update pivot BVPairingQueue
+            $pairingqueues = BVPairingQueue::where('order_id', $request->_id)->get();
+            foreach ($pairingqueues as $key => $pairingqueue) {
+                $pairingqueue_upd = BVPairingQueue::find($pairingqueue->id);
+                $pairingqueue_upd->status = 'active';
+                $pairingqueue_upd->save();
+            }
+            //update pivot products details
+            $ids = $order->productdetails()->allRelatedIds();
+            foreach ($ids as $products_id) {
+                $order->productdetails()->updateExistingPivot($products_id, ['status' => 'onhand']);
+            }
+            //update ledger
+            $ledger = Ledger::find($order->ledgers_id);
+            $ledger->status = 'approved';
+            $ledger->save();
+            //return
+            return back()->withError('Unblock Poin Transaksi Berhasil.');
+        } else {
+            return back()->withError('Unblock Poin Transaksi Gagal.');
         }
-        return back()->withError('Unblock Poin Transaksi Berhasil.');
         //return Redirect()->Route('admin.orders.index');
     }
 
@@ -132,8 +154,16 @@ class OrdersController extends Controller
         if ($order->ledgers_id > 0) {
             $ledger = Ledger::find($order->ledgers_id);
             $ledger->status = 'closed';
-            $ledger->save();        }
-        
+            $ledger->save();}
+
+        //update pivot BVPairingQueue
+        $pairingqueues = BVPairingQueue::where('order_id', $order->id)->get();
+        foreach ($pairingqueues as $key => $pairingqueue) {
+            $pairingqueue_upd = BVPairingQueue::find($pairingqueue->id);
+            $pairingqueue_upd->status = 'close';
+            $pairingqueue_upd->save();
+        }
+
         return back()->withError('Batalkan Transaksi Berhasil.');
         //return Redirect()->Route('admin.orders.index');
     }
@@ -481,17 +511,69 @@ class OrdersController extends Controller
     {
         abort_if(Gate::denies('order_delete'), Response::HTTP_FORBIDDEN, '403 Forbidden');
 
-        if ($order->ledgers_id > 0) {
-            $ledger = Ledger::find($order->ledgers_id);
-            $ledger->accounts()->detach();
-            $ledger->delete();
+        //init status delete true
+        $status_del = true;
+        //check status if $order->type == activation_member
+        //get order relate to activation
+        $order_activation = Order::selectRaw("id,count(id) as num_rows")
+            ->where('customers_activation_id', '=', $order->customers_activation_id)
+            ->where('type', '=', 'activation_member')
+            ->get();
+        $order_non_activation = Order::selectRaw("id,count(id) as num_rows")
+            ->where('customers_id', '=', $order->customers_activation_id)
+            ->where('type', '!=', 'activation_member')
+            ->where('status', '!=', 'closed')
+            ->get();
+        $member_3hus = Customer::where('owner_id', '=', $order->customers_activation_id)
+            ->where('id', '!=', $order->customers_activation_id)
+            ->where('status', '!=', 'closed')
+            ->where('ref_bin_id', '>', 0)
+            ->get();
+        if ($order->type == 'activation_member' && count($member_3hus) > 0 && $order->activation_type_id_old == 0) {
+            $status_del = false;
+        }
+        if ($order->type == 'activation_member' && $order_activation[0]->num_rows == 1 && $order_non_activation[0]->num_rows > 0) {
+            $status_del = false;
         }
 
-        $order->products()->detach();
-        $order->productdetails()->detach();
-        $order->points()->detach();
-        $order->delete();
-        return back();
+        //if status delete true
+        if ($status_del) {
+            if ($order->ledgers_id > 0) {
+                $ledger = Ledger::find($order->ledgers_id);
+                $ledger->accounts()->detach();
+                $ledger->delete();
+            }
+
+            $order->products()->detach();
+            $order->productdetails()->detach();
+            $order->points()->detach();
+
+            //update pivot BVPairingQueue
+            $pairingqueues = BVPairingQueue::where('order_id', $order->id)->get();
+            foreach ($pairingqueues as $key => $pairingqueue) {
+                $pairingqueue_upd = BVPairingQueue::find($pairingqueue->id);
+                $pairingqueue_upd->delete();
+            }
+
+            //if order type activation_member close member status
+            if ($order->type == 'activation_member' && $order->activation_type_id_old == 0) {
+                $member = Customer::find($order->customers_activation_id);                
+                $member->status = 'pending';
+                $member->save();                
+            }
+            //if upgrade
+            if ($order->type == 'activation_member' && $order->activation_type_id_old > 0) {
+                $member = Customer::find($order->customers_activation_id);
+                $member->activation_type_id = $order->activation_type_id_old;
+                $member->save();
+            }
+            //order delete
+            $order->delete();
+            return back();
+        } else {
+            $message = 'Delete Order: Gagal Dibatalkan.';
+            return back()->withError($message);
+        }
         //return Redirect()->Route('admin.orders.index');
     }
 

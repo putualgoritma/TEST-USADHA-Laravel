@@ -34,13 +34,14 @@ class ProcessPairing implements ShouldQueue
     protected $member_get_flush_out;
     protected $package_type;
     protected $ref_fee_lev;
+    protected $customer_id;
 
     /**
      * Create a new job instance.
      *
      * @return void
      */
-    public function __construct($order_id, $ref_id, $bv_total, $bvcv_amount, $ref1_fee_point_sale, $ref1_fee_point_upgrade, $ref2_fee_point_sale, $ref2_fee_point_upgrade, $ref1_flush_out, $ledger_id, $cba2, $cbmart, $points_fee_id, $points_upg_id, $ref2_id, $memo, $member_get_flush_out, $package_type, $ref_fee_lev)
+    public function __construct($order_id, $ref_id, $bv_total, $bvcv_amount, $ref1_fee_point_sale, $ref1_fee_point_upgrade, $ref2_fee_point_sale, $ref2_fee_point_upgrade, $ref1_flush_out, $ledger_id, $cba2, $cbmart, $points_fee_id, $points_upg_id, $ref2_id, $memo, $member_get_flush_out, $package_type, $ref_fee_lev, $customer_id)
     {
         $this->order_id = $order_id;
         $this->ref_id = $ref_id;
@@ -61,6 +62,7 @@ class ProcessPairing implements ShouldQueue
         $this->member_get_flush_out = $member_get_flush_out;
         $this->package_type = $package_type;
         $this->ref_fee_lev = $ref_fee_lev;
+        $this->customer_id = $customer_id;
     }
 
     /**
@@ -70,6 +72,6 @@ class ProcessPairing implements ShouldQueue
      */
     public function handle()
     {
-        return $this->fee_pairing($this->order_id, $this->ref_id, $this->bv_total, $this->bvcv_amount, $this->ref1_fee_point_sale, $this->ref1_fee_point_upgrade, $this->ref2_fee_point_sale, $this->ref2_fee_point_upgrade, $this->ref1_flush_out, $this->ledger_id, $this->cba2, $this->cbmart, $this->points_fee_id, $this->points_upg_id, $this->ref2_id, $this->memo, $this->member_get_flush_out, $this->package_type, $this->ref_fee_lev);
+        return $this->fee_pairing($this->order_id, $this->ref_id, $this->bv_total, $this->bvcv_amount, $this->ref1_fee_point_sale, $this->ref1_fee_point_upgrade, $this->ref2_fee_point_sale, $this->ref2_fee_point_upgrade, $this->ref1_flush_out, $this->ledger_id, $this->cba2, $this->cbmart, $this->points_fee_id, $this->points_upg_id, $this->ref2_id, $this->memo, $this->member_get_flush_out, $this->package_type, $this->ref_fee_lev, $this->customer_id);
     }
 }

@@ -35,7 +35,12 @@ class CustomerApi extends Authenticatable
         'lat',
         'lng',
         'province_id',
-        'city_id'
+        'city_id',
+        'ref_bin_id',
+        'slot_x',
+        'slot_y',
+        'owner_id',
+        'activation_type_id'
     ];
 
     public function scopeFilterInput($query)
@@ -55,10 +60,9 @@ class CustomerApi extends Authenticatable
 
     public function refferal()
     {
-        return $this->belongsTo(CustomerApi::class, 'ref_id')->select('id', 'code', 'name');
+        return $this->belongsTo(CustomerApi::class, 'ref_bin_id')->select('id', 'code', 'name');
     }
-
-            
+         
     public function provinces( )
     {
         return $this->belongsTo(Province::class, 'province_id')->select('id', 'title');

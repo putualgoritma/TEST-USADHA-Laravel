@@ -12,9 +12,34 @@ use Illuminate\Http\Request;
 
 class ProductsApiController extends Controller
 {
-    public function activationType()
+    public function activationTypeDetail(Request $request)
     {
-        $activation = Activation::all();
+        $activation = Activation::where('id', $request->id)->first();
+        if (is_null($activation)) {
+            $message = 'Data not found.';
+            $status = false;
+            return response()->json([
+                'status' => $status,
+                'message' => $message,
+            ]);
+        } else {
+            $message = 'Data retrieved successfully.';
+            $status = true;
+            return response()->json([
+                'status' => $status,
+                'message' => $message,
+                'data' => $activation,
+            ]);
+        }
+    }
+
+    public function activationType(Request $request)
+    {
+        if ($request->min) {
+            $activation = Activation::where('id', '>', $request->min)->get();
+        } else {
+            $activation = Activation::where('id', '>', 1)->get();
+        }
         if (is_null($activation)) {
             $message = 'Data not found.';
             $status = false;
@@ -68,6 +93,31 @@ class ProductsApiController extends Controller
         })
             ->where('status', '=', 'show')
             ->get();
+
+        return $products;
+    }
+
+    public function indexMemberPackage(Request $request)
+    {
+        try {
+            if($request->page){
+            $products = Product::select('*')->FilterInput()
+                ->where('type', '=', 'package')
+                ->where('package_type', '=', 'member')
+                ->where('activation_type_id', '=', $request->activation_type_id)
+                ->where('status', '=', 'show')
+                ->paginate(10, ['*'], 'page', $request->page);
+            }else{
+                $products = Product::select('*')->FilterInput()
+                ->where('type', '=', 'package')
+                ->where('package_type', '=', 'member')
+                ->where('activation_type_id', '=', $request->activation_type_id)
+                ->where('status', '=', 'show')
+                ->get();
+            }
+        } catch (QueryException $exception) {
+            return;
+        }
 
         return $products;
     }

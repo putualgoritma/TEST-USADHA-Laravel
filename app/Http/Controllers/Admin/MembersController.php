@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\ActivationType;
+use App\BVPairingQueue;
 use App\Career;
 use App\Careertype;
 use App\Customer;
@@ -90,94 +91,101 @@ class MembersController extends Controller
             $order_non_activation = Order::selectRaw("id,count(id) as num_rows")
                 ->where('customers_id', '=', $request->id)
                 ->where('type', '!=', 'activation_member')
+                ->where('status', '!=', 'closed')
                 ->get();
             // return $order_non_activation;
             if ($order_activation[0]->num_rows == 1 && $order_non_activation[0]->num_rows == 0) {
                 $order = Order::find($order_activation[0]->id);
-                $order->status = 'closed';
-                $order->status_delivery = 'pending';
-                $order->save();
-                //if order type activation_member close member status
-                if ($order->type == 'activation_member' && $order->activation_type_id_old == 0) {
-                    $member = Customer::find($order->customers_activation_id);
-                    $member->phone = $member->phone . "xxx";
-                    $member->email = $member->email . "xxx";
-                    $member->status = 'closed';
-                    $member->save();
-                }
-                //update pivot points
-                $points_id = 1;
-                $order->points()->updateExistingPivot($points_id, [
-                    'status' => 'onhold',
-                ]);
-                $points_id2 = 2;
-                $order->points()->updateExistingPivot($points_id2, [
-                    'status' => 'onhold',
-                ]);
-                $points_id3 = 3;
-                $order->points()->updateExistingPivot($points_id3, [
-                    'status' => 'onhold',
-                ]);
-                $points_id4 = 4;
-                $order->points()->updateExistingPivot($points_id4, [
-                    'status' => 'onhold',
-                ]);
-                //update pivot products details
-                $ids = $order->productdetails()->allRelatedIds();
-                foreach ($ids as $products_id) {
-                    $order->productdetails()->updateExistingPivot($products_id, ['status' => 'onhold']);
-                }
-                //update ledger
-                $ledger = Ledger::find($order->ledgers_id);
-                $ledger->status = 'closed';
-                $ledger->save();
-                //remove pairing
-                $pairings = Pairing::where('order_id', $order->id)->get();
-                foreach ($pairings as $key => $pairing) {
-                    $pairing_del = Pairing::find($pairing->id);
-                    //print_r($pairing_del);
-                    $pairing_del->delete();
-                }
-                //push notif to member
-                $user = Customer::find($order->customers_id);
-                //onesignal
-                $id_onesignal = $user->id_onesignal;
-                $memo = 'Hallo ' . $user->name . ', Order ' . $order->code . ' telah dibatalkan.';
-                $register = date("Y-m-d");
-                //store to logs_notif
-                $data = ['register' => $register, 'customers_id' => $order->customers_id, 'memo' => $memo];
-                $logs = LogNotif::create($data);
-                //push notif
-                if (!empty($id_onesignal)) {
-                    $this->onesignal_client->sendNotificationToUser(
+                $member = Customer::find($order->customers_activation_id);
+                $member_3hus = Customer::where('owner_id', '=', $member->id)
+                    ->where('id', '!=', $member->id)
+                    ->where('status', '!=', 'closed')
+                    ->where('ref_bin_id', '>', 0)
+                    ->get();
+                if (count($member_3hus)==0) {
+                    $order->status = 'closed';
+                    $order->status_delivery = 'pending';
+                    $order->save();
+                    //if order type activation_member close member status
+                    if ($order->type == 'activation_member' && $order->activation_type_id_old == 0) {
+                        $member->phone = $member->phone . "xxx";
+                        $member->email = $member->email . "xxx";
+                        $member->status = 'closed';
+                        $member->slot_x = null;
+                        $member->slot_y = null;
+                        $member->ref_bin_id = null;
+                        $member->save();
+                    }
+
+                    //reset points
+                    $orderpoints = OrderPoint::where('orders_id', $order->id)->get();
+                    foreach ($orderpoints as $key => $orderpoint) {
+                        $orderpoint_upd = OrderPoint::find($orderpoint->id);
+                        $orderpoint_upd->status = 'onhold';
+                        $orderpoint_upd->save();
+                    }
+                    //reset pivot products details
+                    $ids = $order->productdetails()->allRelatedIds();
+                    foreach ($ids as $products_id) {
+                        $order->productdetails()->updateExistingPivot($products_id, ['status' => 'onhold']);
+                    }
+                    //reset pairing
+                    $pairingqueues = BVPairingQueue::where('order_id', $order->id)->get();
+                    foreach ($pairingqueues as $key => $pairingqueue) {
+                        $pairingqueue_upd = BVPairingQueue::find($pairingqueue->id);
+                        $pairingqueue_upd->status = 'close';
+                        $pairingqueue_upd->save();
+                    }
+                    //reset ledger
+                    $ledger = Ledger::find($order->ledgers_id);
+                    $ledger->status = 'closed';
+                    $ledger->save();
+
+                    //push notif to member
+                    $user = Customer::find($order->customers_id);
+                    //onesignal
+                    $id_onesignal = $user->id_onesignal;
+                    $memo = 'Hallo ' . $user->name . ', Order ' . $order->code . ' telah dibatalkan.';
+                    $register = date("Y-m-d");
+                    //store to logs_notif
+                    $data = ['register' => $register, 'customers_id' => $order->customers_id, 'memo' => $memo];
+                    $logs = LogNotif::create($data);
+                    //push notif
+                    if (!empty($id_onesignal)) {
+                        $this->onesignal_client->sendNotificationToUser(
+                            $memo,
+                            $id_onesignal,
+                            $url = null,
+                            $data = null,
+                            $buttons = null,
+                            $schedule = null
+                        );}
+                    //push notif to agent
+                    $user_os = Customer::find($order->agents_id);
+                    $id_onesignal = $user_os->id_onesignal;
+                    $memo = 'Hallo ' . $user_os->name . ', Order ' . $order->code . ' telah dibatalkan.';
+                    $register = date("Y-m-d");
+                    //store to logs_notif
+                    $data = ['register' => $register, 'customers_id' => $order->agents_id, 'memo' => $memo];
+                    $logs = LogNotif::create($data);
+                    //push notif
+                    OneSignal::sendNotificationToUser(
                         $memo,
                         $id_onesignal,
                         $url = null,
                         $data = null,
                         $buttons = null,
                         $schedule = null
-                    );}
-                //push notif to agent
-                $user_os = Customer::find($order->agents_id);
-                $id_onesignal = $user_os->id_onesignal;
-                $memo = 'Hallo ' . $user_os->name . ', Order ' . $order->code . ' telah dibatalkan.';
-                $register = date("Y-m-d");
-                //store to logs_notif
-                $data = ['register' => $register, 'customers_id' => $order->agents_id, 'memo' => $memo];
-                $logs = LogNotif::create($data);
-                //push notif
-                OneSignal::sendNotificationToUser(
-                    $memo,
-                    $id_onesignal,
-                    $url = null,
-                    $data = null,
-                    $buttons = null,
-                    $schedule = null
-                );                
-                //response
-                $message = 'Aktivasi Member: ' . $member->code . ' - ' . $member->name . ' Sudah Dibatalkan.';
-                return back()->withError($message)->withInput();
-            } else {
+                    );
+                    //response
+                    $message = 'Aktivasi Member: ' . $member->code . ' - ' . $member->name . ' Sudah Dibatalkan.';
+                    return back()->withError($message)->withInput();
+                } else {
+                    $member = Customer::find($request->id);
+                    $message = 'Pembatalan Aktivasi Member: ' . $member->code." - ".count($member_3hus) ." - ".$order_activation[0]->num_rows. " - ".$order_non_activation[0]->num_rows.  ' - ' . $member->name . ' Gagal Dibatalkan. Member Terkait Member Lain.';
+                    return redirect()->route('admin.members.index')->withError($message);
+                    // return back()->withError($message)->withInput();
+                }} else {
                 $member = Customer::find($request->id);
                 $message = 'Pembatalan Aktivasi Member: ' . $member->code . ' - ' . $member->name . ' Gagal Dibatalkan.';
                 return redirect()->route('admin.members.index')->withError($message);
@@ -428,7 +436,7 @@ class MembersController extends Controller
         if ($points_balance >= $total && $stock_status == true) {
             /*set member */
             $password_def = bcrypt('b2e5l709g');
-            $data = array_merge($request->all(), ['status' => 'active', 'type' => 'member', 'password' => $password_def, 'parent_id' => $request->input('customers_id'), 'ref_id' => $request->input('customers_id')]);
+            $data = array_merge($request->all(), ['status' => 'active', 'type' => 'member', 'password' => $password_def, 'parent_id' => $request->input('customers_id'), 'ref_id' => $request->input('customers_id'), 'ref_bin_id' => $request->input('customers_id')]);
             $member = Member::create($data);
             /*set order*/
             //set def
@@ -520,22 +528,7 @@ class MembersController extends Controller
         $members['get_member_down1'] = $this->get_member_down($member->id, 1);
         $members['get_member_down2'] = $this->get_member_down($member->id, 2);
         $members['get_member_down3'] = $this->get_member_down($member->id, 3);
-        $members['get_member_down4'] = $this->get_member_down($member->id, 4);
-
-        //check if level change
-        if (!empty($career)) {
-            if ($career->careertype_id < $members['level_checked']) {
-                //update career
-                $data = ['customer_id' => $request->customer_id, 'careertype_id' => $members['level_checked'], 'current_ro_amount' => $members['member_ro']];
-                $career_upd = Career::create($data);
-            }
-        } else {
-            if ($members['level_checked'] > 0) {
-                //insert career
-                $data = ['customer_id' => $request->customer_id, 'careertype_id' => $members['level_checked'], 'current_ro_amount' => $members['member_ro']];
-                $career_crt = Career::create($data);
-            }
-        }
+        $members['get_member_down4'] = $this->get_member_down($member->id, 4);        
 
         $careertypes = Careertype::with('careertypes')
             ->where('id', '>', $career_selected_id)
@@ -544,44 +537,93 @@ class MembersController extends Controller
             ->with('activationdownlines')
             ->get();
         foreach ($careertypes as $key => $value) {
+            $status_total = 0;
+            $inc = 0;
             //get member status
-            $member_activation_status = 0;
             if ($value->activation_type_id <= $members['member']->activation_type_id) {
                 $member_activation_status = 1;
+                $status_total += 1;
+            } else {
+                $member_activation_status = 0;
             }
             $careertypes[$key]->member_activation_status = $member_activation_status;
+            $inc++;
             //get member ro status
-            $member_ro_status = 0;
             if ($value->ro_min_bv <= $members['member_ro']) {
                 $member_ro_status = 1;
+                $status_total += 1;
+            } else {
+                $member_ro_status = 0;
             }
             $careertypes[$key]->member_ro_status = $member_ro_status;
+            $inc++;
             //get member fee status
-            $member_fee_status = 0;
             if ($value->fee_min <= $members['member_fee1'][0]->total && $value->fee_min <= $members['member_fee2'][0]->total && $value->fee_min <= $members['member_fee3'][0]->total) {
                 $member_fee_status = 1;
+                $status_total += 1;
+            } else {
+                $member_fee_status = 0;
             }
             $careertypes[$key]->member_fee_status = $member_fee_status;
+            $inc++;
             //get member down
-            $member_down_status = 0;
             $member_down = $this->get_member_down($member->id, $value->ref_downline_id);
             if ($value->ref_downline_num <= $member_down[0]->total_downline) {
                 $member_down_status = 1;
+                $status_total += 1;
+            } else {
+                $member_down_status = 0;
             }
             $careertypes[$key]->member_down_status = $member_down_status;
+            $inc++;
             $careertypes[$key]->member_down = $member_down[0]->total_downline;
 
             if ($value->team_level == 'career' && count($value->careertypes) > 0) {
                 $get_member_level = $this->get_member_level($member->id, $value->careertypes, 'career');
                 $careertypes[$key]->team_levels = $get_member_level['levels'];
                 $careertypes[$key]->team_level_status = $get_member_level['status'];
+                if ($get_member_level['status'] == 1) {
+                    $status_total += 1;
+                }
             }
             if ($value->team_level == 'activation' && count($value->activationtypes) > 0) {
                 $get_member_level = $this->get_member_level($member->id, $value->activationtypes, 'activation');
                 $careertypes[$key]->team_levels = $get_member_level['levels'];
                 $careertypes[$key]->team_level_status = $get_member_level['status'];
+                if ($get_member_level['status'] == 1) {
+                    $status_total += 1;
+                }
+            }
+            $inc++;
+            if ($inc == $status_total) {
+                $careertypes[$key]->level_status = 1;
+                $members['level_checked'] = $value->id;
+                $members['level_name_checked'] = $value->name;
+            } else {
+                $careertypes[$key]->level_status = 0;
+            }
+
+        }
+
+        //check if level change
+        if (!empty($career)) {
+            if ($career->careertype_id < $members['level_checked']) {
+                //close all related
+                Career::where('customer_id', $request->customer_id)->update(['status' => 'close']);
+                //update career
+                $data = ['customer_id' => $member->id, 'careertype_id' => $members['level_checked'], 'current_ro_amount' => $members['member_ro']];
+                $career_upd = Career::create($data);
+            }
+        } else {
+            if ($members['level_checked'] > 0) {
+                //close all related
+                Career::where('customer_id', $request->customer_id)->update(['status' => 'close']);
+                //insert career
+                $data = ['customer_id' => $member->id, 'careertype_id' => $members['level_checked'], 'current_ro_amount' => $members['member_ro']];
+                $career_crt = Career::create($data);
             }
         }
+
         return view('admin.members.show', compact('member', 'careertypes', 'members'));
     }
 
@@ -603,10 +645,21 @@ class MembersController extends Controller
                 $order->products()->detach();
                 $order->productdetails()->detach();
                 $order->points()->detach();
+                //update pivot BVPairingQueue
+                $pairingqueues = BVPairingQueue::where('order_id', $order->id)->get();
+                foreach ($pairingqueues as $key => $pairingqueue) {
+                    $pairingqueue_upd = BVPairingQueue::find($pairingqueue->id);
+                    $pairingqueue_upd->delete();
+                }
                 $order->delete();
             }
             // $member->delete();
+            $member->phone = $member->phone . "xxx";
+            $member->email = $member->email . "xxx";
             $member->status = 'closed';
+            $member->slot_x = null;
+            $member->slot_y = null;
+            $member->ref_bin_id = null;
             $member->save();
         } else {
             return back()->withError('Gagal Delete, Member Active!');

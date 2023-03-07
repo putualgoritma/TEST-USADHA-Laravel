@@ -6,7 +6,6 @@ use App\Activation;
 use App\City;
 use App\CustomerApi;
 use App\Http\Controllers\Controller;
-use App\Jobs\ProcessPairing;
 use App\Ledger;
 use App\LogNotif;
 use App\Mail\MemberEmail;
@@ -17,6 +16,7 @@ use App\Order;
 use App\OrderDetails;
 use App\OrderPoint;
 use App\Package;
+use App\PairingInfo;
 use App\Product;
 use App\Province;
 use App\Traits\TraitModel;
@@ -39,6 +39,265 @@ class CustomersApiController extends Controller
     public function __construct()
     {
         $this->onesignal_client = new OneSignalClient(env('ONESIGNAL_APP_ID_MEMBER'), env('ONESIGNAL_REST_API_KEY_MEMBER'), '');
+    }
+
+    public function testPairing(Request $request)
+    {
+        $testPairing = $this->test_pairing_bin($request->order_id, $request->customer_id, $request->bv_amount_inc, $request->points_fee_id);
+    }
+
+    public function getAutoMaintain(Request $request)
+    {
+        $auto_maintain_bv = $this->career_type($request->customer_id);
+
+        return response()->json([
+            'success' => true,
+            'data' => $auto_maintain_bv,
+        ]);
+    }
+
+    public function statusListUp(Request $request)
+    {
+        $status_list_upline = $this->status_list_upline($request->slot_x, $request->slot_y);
+
+        return response()->json([
+            'success' => true,
+            'data' => $status_list_upline,
+        ]);
+    }
+
+    public function pairing_info(Request $request)
+    {
+        //BVPO
+        $bvpo_row = NetworkFee::select('*')
+            ->Where('code', '=', 'BVPO')
+            ->first();
+        //
+        $bv_queue = $this->get_bv_queue($request->id);
+        $bv_pairing_r = ($bv_queue['r'] - $bv_queue['c']) / $bvpo_row->amount;
+        $bv_pairing_l = ($bv_queue['l'] - $bv_queue['c']) / $bvpo_row->amount;
+        $bv_queue_c = $bv_queue['c'] / $bvpo_row->amount;
+        $bv_queue_c_count = $bv_queue['c_count'];
+        $reg_today = date('Y-m-d');
+        $get_bv_daily_queue = $this->get_bv_daily_queue($request->id, $reg_today) / $bvpo_row->amount;
+        return response()->json([
+            'success' => true,
+            'bv_pairing_r' => $bv_pairing_r,
+            'bv_pairing_l' => $bv_pairing_l,
+            'bv_queue_c' => $bv_queue_c,
+            'bv_queue_c_count' => $bv_queue_c_count,
+            'get_bv_daily_queue' => $get_bv_daily_queue,
+        ]);
+    }
+
+    public function net_info(Request $request)
+    {
+        $member = CustomerApi::find($request->id);
+        $downline_ref = CustomerApi::select('id')
+            ->where('ref_bin_id', $request->id)
+            ->where('type', '=', 'member')
+            ->where('status', '=', 'active')
+            ->get();
+        //get total level
+        $get_level_total = $this->get_level_total($member->slot_x, $member->slot_y, 1, 0);
+        //get left and right child
+        $slot_selected_x = $member->slot_x + 1;
+        $slot_selected_y_left = ($member->slot_y * 2) - 1;
+        $slot_selected_y_right = ($member->slot_y * 2);
+        $downline_left = CustomerApi::select('id')
+            ->where('ref_bin_id', '>', 0)
+            ->where('type', '=', 'member')
+            ->where('slot_x', '=', $slot_selected_x)
+            ->where('slot_y', $slot_selected_y_left)
+            ->first();
+        $downline_right = CustomerApi::select('id')
+            ->where('ref_bin_id', '>', 0)
+            ->where('type', '=', 'member')
+            ->where('slot_x', '=', $slot_selected_x)
+            ->where('slot_y', $slot_selected_y_right)
+            ->first();
+
+        $downline_left_total = 0;
+        if ($downline_left) {
+            $downline_left_total = $this->get_downline_total($slot_selected_x, $slot_selected_y_left, 1, 0) + 1;
+        }
+        $downline_right_total = 0;
+        if ($downline_right) {
+            $downline_right_total = $this->get_downline_total($slot_selected_x, $slot_selected_y_right, 1, 0) + 1;
+        }
+
+        return response()->json([
+            'success' => true,
+            'right_total' => $downline_right_total,
+            'left_total' => $downline_left_total,
+            'level_total' => $get_level_total,
+            'ref_total' => count($downline_ref),
+        ]);
+    }
+
+    public function groupLRAmount(Request $request)
+    {
+        $pairing_bin = $this->pairing_bin($request->order_id, $request->customer_id, $request->bv_amount_inc, $request->points_fee_id);
+
+        return response()->json([
+            'success' => true,
+            'data' => $pairing_bin,
+        ]);
+    }
+
+    public function slotListUp(Request $request)
+    {
+        $list_upline = $this->get_list_upline($request->slot_x, $request->slot_y);
+
+        return response()->json([
+            'success' => true,
+            'data' => $list_upline,
+        ]);
+    }
+
+    public function slotIfLR(Request $request)
+    {
+        $if_lr = $this->group_if_lr($request->group_slot_x, $request->group_slot_y, $request->slot_x, $request->slot_y);
+        $status = 'l';
+        if ($if_lr['y'] % 2 == 0) {
+            $status = 'r';
+        }
+        return response()->json([
+            'success' => true,
+            'x' => $if_lr['x'],
+            'y' => $if_lr['y'],
+            'status' => $status,
+        ]);
+    }
+
+    public function slotEmpty(Request $request)
+    {
+        //get x & y referal
+        $user = CustomerApi::where('id', $request->id)->first();
+        $slot_arr = array();
+        $get_slot_empty = $this->get_slot_empty($user->slot_x, $user->slot_y, 1, $slot_arr);
+        return response()->json([
+            'success' => true,
+            'parent' => $get_slot_empty,
+        ]);
+    }
+
+    public function slotTree(Request $request)
+    {
+        $slot_prev_x = -1;
+        $slot_prev_y = -1;
+        $user = CustomerApi::where('id', $request->id)->first();
+
+        if ($request->has('slot_x') && $request->has('slot_x') != null) {
+            if ($request->status == '0') {
+                $yu = 1;
+                $slot_arr = array();
+                if ($request->type_hu == 3) {
+                    $get_slot_empty = $this->get_slot_empty_3hu($request->slot_x, $request->slot_y, 1, $slot_arr);
+                } else {
+                    $get_slot_empty = $this->get_slot_empty($request->slot_x, $request->slot_y, 1, $slot_arr);
+                }
+                $slot_init_x = $get_slot_empty['x'];
+                $slot_init_y = $get_slot_empty['y'];
+            } else {
+                $yu = 2;
+                $slot_init_x = $request->slot_x;
+                $slot_init_y = $request->slot_y;
+            }
+            if ($slot_init_x > $user->slot_x) {
+                $slot_prev_x = $slot_init_x - 1;
+                $slot_prev_y = ceil($slot_init_y / 2);
+                //$slot_prev_y = ceil($slot_prev_y / 2);
+                //$slot_prev_y = ceil($slot_prev_y / 2);
+            }
+        } else {
+            $yu = 3;
+            $slot_init_x = $user->slot_x;
+            $slot_init_y = $user->slot_y;
+        }
+        $slot_arr = array();
+        $slot_arr[0][0]['x'] = $slot_init_x;
+        $slot_arr[0][0]['y'] = $slot_init_y;
+        $slot_customer = CustomerApi::select('id', 'activation_type_id', 'code', 'name', 'status', 'slot_x', 'slot_y')->where("slot_x", $slot_init_x)->where("slot_y", $slot_init_y)->with('activations')->first();
+        if ($slot_customer) {
+            $slot_arr[0][0]['data'] = $slot_customer;
+            $top_id = $slot_customer->id;
+        } else {
+            $slot_arr[0][0]['data'] = '';
+            $top_id = 0;
+        }
+        for ($i = 1; $i <= 3; $i++) {
+            $slot_arr[$i][0]['x'] = $slot_arr[$i - 1][0]['x'] + 1;
+            $slot_arr[$i][0]['y'] = ($slot_arr[$i - 1][0]['y'] * 2) - 1;
+            $slot_customer = CustomerApi::select('id', 'activation_type_id', 'code', 'name', 'status', 'slot_x', 'slot_y')->where("slot_x", $slot_arr[$i][0]['x'])->where("slot_y", $slot_arr[$i][0]['y'])->with('activations')->first();
+            if ($slot_customer) {
+                $slot_arr[$i][0]['data'] = $slot_customer;
+            } else {
+                $slot_arr[$i][0]['data'] = '';
+            }
+            for ($j = 1; $j < pow(2, $i); $j++) {
+                $slot_arr[$i][$j]['x'] = $slot_arr[$i][$j - 1]['x'];
+                $slot_arr[$i][$j]['y'] = ($slot_arr[$i][$j - 1]['y']) + 1;
+                $slot_customer = CustomerApi::select('id', 'activation_type_id', 'code', 'name', 'status', 'slot_x', 'slot_y')->where("slot_x", $slot_arr[$i][$j]['x'])->where("slot_y", $slot_arr[$i][$j]['y'])->with('activations')->first();
+                if ($slot_customer) {
+                    $slot_arr[$i][$j]['data'] = $slot_customer;
+                } else {
+                    $slot_arr[$i][$j]['data'] = '';
+                }
+            }
+        }
+        return response()->json([
+            'success' => true,
+            'slots' => $slot_arr,
+            'prev_x' => $slot_prev_x,
+            'prev_y' => $slot_prev_y,
+            'status' => $yu,
+        ]);
+    }
+
+    public function loginSwitch()
+    {
+        $user = CustomerApi::where('id', request('id'))
+            ->where('type', 'member')
+            ->where('status', '!=', 'close')
+            ->with(['activations', 'refferal', 'provinces', 'city'])
+            ->first();
+        if (!empty($user)) {
+            $user->ref_link = "https://admin.belogherbal.com/member?ref=" . Hashids::encode($user->id);
+            return response()->json([
+                'success' => true,
+                'user' => $user,
+            ]);
+        } else {
+            $message = 'Email & Password yang Anda masukkan salah. Salah memasukkan Email & Password lebih dari 3x maka Account akan otomatis di blokir.';
+            return response()->json([
+                'success' => false,
+                'message' => $message,
+            ], 401);
+        }
+    }
+
+    public function membersHu(Request $request)
+    {
+        try {
+            if ($request->exc != '') {
+                $members = CustomerApi::select('*')->where('owner_id', $request->owner_id)->where('ref_bin_id', '>', 0)->where('id', '!=', $request->exc)->get();
+            } else {
+                $members = CustomerApi::select('*')->where('owner_id', $request->owner_id)->where('ref_bin_id', '>', 0)->get();
+            }
+            $owner = CustomerApi::select('*')->where('id', $request->owner_id)->first();
+        } catch (QueryException $exception) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Data Kosong.',
+            ], 401);
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => $members,
+            'owner' => $owner,
+        ]);
     }
 
     public function logsUpdate($id)
@@ -169,7 +428,36 @@ class CustomersApiController extends Controller
     {
         try {
             if (isset($request->page)) {
-                $members = CustomerApi::select('*')->FilterInput()
+                $members = CustomerApi::select('*')->FilterInput()->where('status', '!=', 'closed')->where(function ($qry) {
+                    $qry->where('ref_bin_id', '>', 0)
+                        ->orWhere('type', 'agent');
+                })
+                    ->paginate(10, ['*'], 'page', $request->page);
+            } else {
+                $members = CustomerApi::select('*')->where('status', '!=', 'closed')->where('ref_bin_id', '>', 0)->where(function ($qry) {
+                    $qry->where('ref_bin_id', '>', 0)
+                        ->orWhere('type', 'agent');
+                })
+                    ->get();
+            }
+        } catch (QueryException $exception) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Data Kosong.',
+            ], 401);
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => $members,
+        ]);
+    }
+
+    public function agentlist(Request $request)
+    {
+        try {
+            if (isset($request->page)) {
+                $members = CustomerApi::select('*')->where('type', 'agent')->where('status', 'active')->FilterInput()
                     ->paginate(10, ['*'], 'page', $request->page);
             } else {
                 $members = CustomerApi::select('*')
@@ -192,7 +480,7 @@ class CustomersApiController extends Controller
     {
         try {
             $down_arr = array();
-            $data = $this->downline_tree($request->ref_id, $down_arr);
+            $data = $this->downline_tree($request->ref_bin_id, $down_arr);
             return response()->json([
                 'success' => true,
                 'data' => $data,
@@ -241,9 +529,30 @@ class CustomersApiController extends Controller
         ]);
     }
 
-    public function downline($id)
+    public function downlineAgent($id)
     {
         $user = CustomerApi::where('ref_id', $id)
+            ->where('status', 'active')
+            ->with('activations')
+            ->with('refferal')
+            ->orderBy('activation_at', 'ASC')
+            ->get();
+        if (!empty($user)) {
+            return response()->json([
+                'success' => true,
+                'data' => $user,
+            ]);
+        } else {
+            return response()->json([
+                'success' => false,
+                'message' => 'Data is empty.',
+            ], 401);
+        }
+    }
+
+    public function downline($id)
+    {
+        $user = CustomerApi::where('ref_bin_id', $id)
             ->where('status', 'active')
             ->with('activations')
             ->with('refferal')
@@ -312,10 +621,18 @@ class CustomersApiController extends Controller
                 $success['token'] = Auth::user()->createToken('authToken')->accessToken;
                 //After successfull authentication, notice how I return json parameters
                 $user->ref_link = "https://admin.belogherbal.com/member?ref=" . Hashids::encode($user->id);
+                //get child
+                $users_hu = CustomerApi::select('*')->where('owner_id', $user->id)->where('ref_bin_id', '>', 0)->get();
+                $hu = count($users_hu);
+                //get status upline
+                $status_list_upline = $this->status_list_upline($user->slot_x, $user->slot_y);
+                //return
                 return response()->json([
                     'success' => true,
                     'token' => $success,
                     'user' => $user,
+                    'hu' => $hu,
+                    'status_up' => $status_list_upline,
                 ]);
             } else {
                 //if authentication is unsuccessfull, notice how I return json parameters
@@ -505,10 +822,11 @@ class CustomersApiController extends Controller
             $parent_id = $this->set_parent($referals_id);
             $input['parent_id'] = $parent_id;
             $input['ref_id'] = $referals_id;
+            $input['ref_bin_id'] = $referals_id;
         }
 
         //check ref_id
-        $ref_row = Member::find($input['ref_id']);
+        $ref_row = Member::find($input['ref_bin_id']);
         if ($ref_row->status != 'active') {
             return response()->json([
                 'success' => false,
@@ -546,10 +864,10 @@ class CustomersApiController extends Controller
         } else {
             $validator = Validator::make($request->all(), [
                 'name' => 'required',
-                //'phone' => 'required|unique:customers|regex:/(0)[0-9]{10}/',
-                'phone' => 'required',
-                //'email' => 'required|email|unique:customers',
-                'email' => 'required|email',
+                'phone' => 'required|unique:customers',
+                //'phone' => 'required',
+                'email' => 'required|email|unique:customers',
+                //'email' => 'required|email',
                 'password' => 'required',
                 'register' => 'required',
                 'address' => 'required',
@@ -571,6 +889,15 @@ class CustomersApiController extends Controller
                     'message' => 'Register Gagal, Status Referal belum Activasi.',
                 ], 401);
             }
+
+            //check up status
+            // $status_list_upline = $this->status_list_upline($request->slot_x, $request->slot_y);
+            // if ($status_list_upline['status'] == 0) {
+            //     return response()->json([
+            //         'success' => false,
+            //         'message' => 'Register Gagal, Status Upline masih ada yang belum activ.',
+            //     ], 401);
+            // }
 
             //if sponsor is set
             $sponsor_id = $request->ref_id;
@@ -624,9 +951,31 @@ class CustomersApiController extends Controller
                 $parent_id = $this->set_parent($input['ref_id']);
                 $input['parent_id'] = $parent_id;
 
+                $input['ref_bin_id'] = $input['ref_id'];
+                $input['slot_x'] = $input['slot_x'];
+                $input['slot_y'] = $input['slot_y'];
+
                 try {
                     $user = CustomerApi::create($input);
                     $member = $user;
+                    //check if 3 HU
+                    if ($input['type_hu'] == 3) {
+                        //get slot HU
+                        $slot_left_x = $input['slot_x'] + 1;
+                        $slot_right_x = $input['slot_x'] + 1;
+                        $slot_left_y = ($input['slot_y'] * 2) - 1;
+                        $slot_right_y = $input['slot_y'] * 2;
+                        //register L HU
+                        $last_code = $this->mbr_get_last_code();
+                        $code = acc_code_generate($last_code, 8, 3);
+                        $data = ['register' => $input['register'], 'name' => $input['name'] . "-002", 'activation_type_id' => 2, 'type' => 'member', 'status' => 'pending', 'code' => $code, 'parent_id' => $member->id, 'ref_id' => $input['ref_id'], 'owner_id' => $member->id, 'ref_bin_id' => $input['ref_id'], 'slot_x' => $slot_left_x, 'slot_y' => $slot_left_y];
+                        $hu_l = CustomerApi::create($data);
+                        //register R HU
+                        $last_code = $this->mbr_get_last_code();
+                        $code = acc_code_generate($last_code, 8, 3);
+                        $data = ['register' => $input['register'], 'name' => $input['name'] . "-003", 'activation_type_id' => 2, 'type' => 'member', 'status' => 'pending', 'code' => $code, 'parent_id' => $member->id, 'ref_id' => $input['ref_id'], 'owner_id' => $member->id, 'ref_bin_id' => $input['ref_id'], 'slot_x' => $slot_right_x, 'slot_y' => $slot_right_y];
+                        $hu_r = CustomerApi::create($data);
+                    }
                 } catch (QueryException $exception) {
                     return response()->json([
                         'success' => false,
@@ -697,21 +1046,21 @@ class CustomersApiController extends Controller
                 if (($bv_nett > $min_plat) && $package_activation_type_id < 4) {
                     $ref1_fee_point_sale_def = ($rsbv_g1_percen / 100) * ($sbv_percen / 100) * $min_plat;
                 }
-                //ref 2 package fee
-                $sbv_percen = $package_network_row[0]->sbv;
-                $rsbv_g2_percen = $package_network_row[0]->rsbv_g2;
-                $ref2_fee_point_sale_def = ($rsbv_g2_percen / 100) * ($sbv_percen / 100) * $bv_nett;
-                if (($bv_nett > $min_plat) && $package_activation_type_id < 4) {
-                    $ref2_fee_point_sale_def = ($rsbv_g2_percen / 100) * ($sbv_percen / 100) * $min_plat;
-                }
+                // //ref 2 package fee
+                // $sbv_percen = $package_network_row[0]->sbv;
+                // $rsbv_g2_percen = $package_network_row[0]->rsbv_g2;
+                // $ref2_fee_point_sale_def = ($rsbv_g2_percen / 100) * ($sbv_percen / 100) * $bv_nett;
+                // if (($bv_nett > $min_plat) && $package_activation_type_id < 4) {
+                //     $ref2_fee_point_sale_def = ($rsbv_g2_percen / 100) * ($sbv_percen / 100) * $min_plat;
+                // }
 
                 //ref 1
                 $ref1_fee_point_sale = 0;
                 $ref1_fee_point_upgrade = 0;
                 $ref1_flush_out = 0;
-                $ref1_row = Member::find($member->ref_id);
+                $ref1_row = Member::find($member->ref_bin_id);
                 //ref 1 row
-                if (!empty($ref1_row) && $ref1_row->ref_id > 0) {
+                if (!empty($ref1_row) && $ref1_row->ref_bin_id > 1) {
                     $ref1_fee_row = NetworkFee::select('*')
                         ->Where('type', '=', 'activation')
                         ->Where('activation_type_id', '=', $ref1_row->activation_type_id)
@@ -720,35 +1069,35 @@ class CustomersApiController extends Controller
                     $rsbv_g1_percen = $ref1_fee_row[0]->rsbv_g1;
                     $ref1_fee_point_sale = ($rsbv_g1_percen / 100) * ($sbv1_percen / 100) * $bv_nett;
                     if (($bv_nett > $min_plat) && $ref1_row->activation_type_id < 4) {
-                        $ref1_fee_point_sale = ($rsbv_g1_percen / 100) * ($sbv1_percen / 100) * $min_plat;
+                        //$ref1_fee_point_sale = ($rsbv_g1_percen / 100) * ($sbv1_percen / 100) * $min_plat;
                     }
                     if ($ref1_fee_point_sale_def > $ref1_fee_point_sale) {
-                        $ref1_flush_out = $ref1_fee_point_sale_def - $ref1_fee_point_sale;
+                        //$ref1_flush_out = $ref1_fee_point_sale_def - $ref1_fee_point_sale;
                     }
                 }
 
-                //ref 2
+                // //ref 2
                 $ref2_fee_point_sale = 0;
                 $ref2_fee_point_upgrade = 0;
                 $member_get_flush_out = 0;
-                $ref2_row = Member::find($ref1_row->ref_id);
-                //ref 2 row
-                if (!empty($ref2_row) && $ref2_row->ref_id > 0) {
-                    $ref2_fee_row = NetworkFee::select('*')
-                        ->Where('type', '=', 'activation')
-                        ->Where('activation_type_id', '=', $ref2_row->activation_type_id)
-                        ->get();
-                    $sbv2_percen = $ref2_fee_row[0]->sbv;
-                    $rsbv_g2_percen = $ref2_fee_row[0]->rsbv_g2;
-                    $ref2_fee_point_sale = ($rsbv_g2_percen / 100) * ($sbv2_percen / 100) * $bv_nett;
-                    if (($bv_nett > $min_plat) && $ref2_row->activation_type_id < 4) {
-                        $ref2_fee_point_sale = ($rsbv_g2_percen / 100) * ($sbv2_percen / 100) * $min_plat;
-                    }
-                    $member_get_flush_out = $ref2_row->id;
-                    if ($ref1_row->activation_type_id >= $ref2_row->activation_type_id) {
-                        $member_get_flush_out = 0;
-                    }
-                }
+                // $ref2_row = Member::find($ref1_row->ref_id);
+                // //ref 2 row
+                // if (!empty($ref2_row) && $ref2_row->ref_id > 0) {
+                //     $ref2_fee_row = NetworkFee::select('*')
+                //         ->Where('type', '=', 'activation')
+                //         ->Where('activation_type_id', '=', $ref2_row->activation_type_id)
+                //         ->get();
+                //     $sbv2_percen = $ref2_fee_row[0]->sbv;
+                //     $rsbv_g2_percen = $ref2_fee_row[0]->rsbv_g2;
+                //     $ref2_fee_point_sale = ($rsbv_g2_percen / 100) * ($sbv2_percen / 100) * $bv_nett;
+                //     if (($bv_nett > $min_plat) && $ref2_row->activation_type_id < 4) {
+                //         $ref2_fee_point_sale = ($rsbv_g2_percen / 100) * ($sbv2_percen / 100) * $min_plat;
+                //     }
+                //     $member_get_flush_out = $ref2_row->id;
+                //     if ($ref1_row->activation_type_id >= $ref2_row->activation_type_id) {
+                //         $member_get_flush_out = 0;
+                //     }
+                // }
                 if ($member_get_flush_out == 0) {
                     $ref1_flush_out = 0;
                 }
@@ -757,7 +1106,7 @@ class CustomersApiController extends Controller
                 $warehouses_id = 1;
                 $last_code = $this->get_last_code('order-agent');
                 $order_code = acc_code_generate($last_code, 8, 3);
-                $data = array('memo' => $memo, 'total' => $total, 'type' => 'activation_member', 'status' => 'pending', 'ledgers_id' => $ledger_id, 'customers_id' => $sponsor_id, 'agents_id' => $request->input('agents_id'), 'payment_type' => 'point', 'code' => $order_code, 'register' => $register, 'bv_activation_amount' => $bv_nett, 'customers_activation_id' => $member->id);
+                $data = array('memo' => $memo, 'total' => $total, 'type' => 'activation_member', 'status' => 'pending', 'ledgers_id' => $ledger_id, 'customers_id' => $sponsor_id, 'agents_id' => $request->input('agents_id'), 'payment_type' => 'point', 'code' => $order_code, 'register' => $register, 'bv_activation_amount' => $bv_nett, 'customers_activation_id' => $member->id, 'bv_total' => $bv_total);
                 $order = Order::create($data);
                 //set order products
                 for ($i = 0; $i < $count_cart; $i++) {
@@ -791,8 +1140,9 @@ class CustomersApiController extends Controller
                 $activation_at = date('Y-m-d H:i:s');
                 $member->parent_id = $parent_id;
                 $member->activation_at = $activation_at;
-                $member->status = 'active';
+                $member->status = 'pending';
                 $member->activation_type_id = $package_activation_type_id;
+                $member->owner_id = $member->id;
                 $member->save();
                 /*set order*/
                 //set def
@@ -805,11 +1155,13 @@ class CustomersApiController extends Controller
                 $com_id = $com_row[0]->id;
 
                 $ref2_id = 0;
-                if (!empty($ref2_row) && $ref2_row->ref_id > 0) {
-                    $ref2_id = $ref2_row->id;
-                }
+                // if (!empty($ref2_row) && $ref2_row->ref_id > 0) {
+                //     $ref2_id = $ref2_row->id;
+                // }
 
-                ProcessPairing::dispatch($order->id, $member->ref_id, $bv_total, $bvcv_row[0]->amount, $ref1_fee_point_sale, $ref1_fee_point_upgrade, $ref2_fee_point_sale, $ref2_fee_point_upgrade, $ref1_flush_out, $ledger_id, $cba2, $cbmart, $points_fee_id, $points_upg_id, $ref2_id, $memo, $member_get_flush_out, 0, 0);
+                //insert pairing info
+                $data = array('order_id' => $order->id, 'ref_id' => $member->ref_bin_id, 'bv_total' => $bv_total, 'bvcv_amount' => $bvcv_row[0]->amount, 'ref1_fee_point_sale' => $ref1_fee_point_sale, 'ref1_fee_point_upgrade' => $ref1_fee_point_upgrade, 'ref2_fee_point_sale' => $ref2_fee_point_sale, 'ref2_fee_point_upgrade' => $ref2_fee_point_upgrade, 'ref1_flush_out' => $ref1_flush_out, 'ledger_id' => $ledger_id, 'cba2' => $cba2, 'cbmart' => $cbmart, 'points_fee_id' => $points_fee_id, 'points_upg_id' => $points_upg_id, 'ref2_id' => $ref2_id, 'memo' => $memo, 'member_get_flush_out' => $member_get_flush_out, 'package_type' => 0, 'ref_fee_lev' => 0, 'customer_id' => $member->id);
+                $pairinginfo = PairingInfo::create($data);
 
                 //set trf points from member to Usadha Bhakti (pending points)
                 $order->points()->attach($points_id, ['amount' => $total, 'type' => 'D', 'status' => 'onhand', 'memo' => 'Penambahan Poin dari (Pending Order) ' . $memo, 'customers_id' => $com_id]);
@@ -863,7 +1215,7 @@ class CustomersApiController extends Controller
             } else {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Saldo Poin Member Tidak Mencukupi.',
+                    'message' => 'Saldo Poin Member Tidak Mencukupi.'.$points_balance.'::'.$total,
                 ], 401);
             }
         }
@@ -1292,6 +1644,16 @@ class CustomersApiController extends Controller
             } else {
                 //set member
                 $member = Member::find($request->input('id'));
+
+                //check up status
+                // $status_list_upline = $this->status_list_upline($member->slot_x, $member->slot_y);
+                // if ($status_list_upline['status'] == 0) {
+                //     return response()->json([
+                //         'success' => false,
+                //         'message' => 'Register Gagal, Status Upline masih ada yang belum activ.',
+                //     ], 401);
+                // }
+
                 $activation_type_id_old = $member->activation_type_id;
                 //get point member
                 $points_id = 1;
@@ -1411,21 +1773,21 @@ class CustomersApiController extends Controller
                     if (($bv_nett > $min_plat) && $package_activation_type_id < 4) {
                         $ref1_fee_point_sale_def = ($rsbv_g1_percen / 100) * ($sbv_percen / 100) * $min_plat;
                     }
-                    //ref 2 package fee
-                    $sbv_percen = $package_network_row[0]->sbv;
-                    $rsbv_g2_percen = $package_network_row[0]->rsbv_g2;
-                    $ref2_fee_point_sale_def = ($rsbv_g2_percen / 100) * ($sbv_percen / 100) * $bv_nett;
-                    if (($bv_nett > $min_plat) && $package_activation_type_id < 4) {
-                        $ref2_fee_point_sale_def = ($rsbv_g2_percen / 100) * ($sbv_percen / 100) * $min_plat;
-                    }
+                    // //ref 2 package fee
+                    // $sbv_percen = $package_network_row[0]->sbv;
+                    // $rsbv_g2_percen = $package_network_row[0]->rsbv_g2;
+                    // $ref2_fee_point_sale_def = ($rsbv_g2_percen / 100) * ($sbv_percen / 100) * $bv_nett;
+                    // if (($bv_nett > $min_plat) && $package_activation_type_id < 4) {
+                    //     $ref2_fee_point_sale_def = ($rsbv_g2_percen / 100) * ($sbv_percen / 100) * $min_plat;
+                    // }
 
                     //ref 1
                     $ref1_fee_point_sale = 0;
                     $ref1_fee_point_upgrade = 0;
                     $ref1_flush_out = 0;
-                    $ref1_row = Member::find($member->ref_id);
+                    $ref1_row = Member::find($member->ref_bin_id);
                     //ref 1 row
-                    if (!empty($ref1_row) && $ref1_row->ref_id > 0) {
+                    if (!empty($ref1_row) && $ref1_row->ref_bin_id > 1) {
                         $ref1_fee_row = NetworkFee::select('*')
                             ->Where('type', '=', 'activation')
                             ->Where('activation_type_id', '=', $ref1_row->activation_type_id)
@@ -1434,10 +1796,10 @@ class CustomersApiController extends Controller
                         $rsbv_g1_percen = $ref1_fee_row[0]->rsbv_g1;
                         $ref1_fee_point_sale = ($rsbv_g1_percen / 100) * ($sbv1_percen / 100) * $bv_nett;
                         if (($bv_nett > $min_plat) && $ref1_row->activation_type_id < 4) {
-                            $ref1_fee_point_sale = ($rsbv_g1_percen / 100) * ($sbv1_percen / 100) * $min_plat;
+                            //$ref1_fee_point_sale = ($rsbv_g1_percen / 100) * ($sbv1_percen / 100) * $min_plat;
                         }
                         if ($ref1_fee_point_sale_def > $ref1_fee_point_sale) {
-                            $ref1_flush_out = $ref1_fee_point_sale_def - $ref1_fee_point_sale;
+                            //$ref1_flush_out = $ref1_fee_point_sale_def - $ref1_fee_point_sale;
                         }
                     }
 
@@ -1445,24 +1807,24 @@ class CustomersApiController extends Controller
                     $ref2_fee_point_sale = 0;
                     $ref2_fee_point_upgrade = 0;
                     $member_get_flush_out = 0;
-                    $ref2_row = Member::find($ref1_row->ref_id);
-                    //ref 2 row
-                    if (!empty($ref2_row) && $ref2_row->ref_id > 0) {
-                        $ref2_fee_row = NetworkFee::select('*')
-                            ->Where('type', '=', 'activation')
-                            ->Where('activation_type_id', '=', $ref2_row->activation_type_id)
-                            ->get();
-                        $sbv2_percen = $ref2_fee_row[0]->sbv;
-                        $rsbv_g2_percen = $ref2_fee_row[0]->rsbv_g2;
-                        $ref2_fee_point_sale = ($rsbv_g2_percen / 100) * ($sbv2_percen / 100) * $bv_nett;
-                        if (($bv_nett > $min_plat) && $ref2_row->activation_type_id < 4) {
-                            $ref2_fee_point_sale = ($rsbv_g2_percen / 100) * ($sbv2_percen / 100) * $min_plat;
-                        }
-                        $member_get_flush_out = $ref2_row->id;
-                        if ($ref1_row->activation_type_id >= $ref2_row->activation_type_id) {
-                            $member_get_flush_out = 0;
-                        }
-                    }
+                    // $ref2_row = Member::find($ref1_row->ref_id);
+                    // //ref 2 row
+                    // if (!empty($ref2_row) && $ref2_row->ref_id > 0) {
+                    //     $ref2_fee_row = NetworkFee::select('*')
+                    //         ->Where('type', '=', 'activation')
+                    //         ->Where('activation_type_id', '=', $ref2_row->activation_type_id)
+                    //         ->get();
+                    //     $sbv2_percen = $ref2_fee_row[0]->sbv;
+                    //     $rsbv_g2_percen = $ref2_fee_row[0]->rsbv_g2;
+                    //     $ref2_fee_point_sale = ($rsbv_g2_percen / 100) * ($sbv2_percen / 100) * $bv_nett;
+                    //     if (($bv_nett > $min_plat) && $ref2_row->activation_type_id < 4) {
+                    //         $ref2_fee_point_sale = ($rsbv_g2_percen / 100) * ($sbv2_percen / 100) * $min_plat;
+                    //     }
+                    //     $member_get_flush_out = $ref2_row->id;
+                    //     if ($ref1_row->activation_type_id >= $ref2_row->activation_type_id) {
+                    //         $member_get_flush_out = 0;
+                    //     }
+                    // }
                     if ($member_get_flush_out == 0) {
                         $ref1_flush_out = 0;
                     }
@@ -1471,7 +1833,7 @@ class CustomersApiController extends Controller
                     $warehouses_id = 1;
                     $last_code = $this->get_last_code('order-agent');
                     $order_code = acc_code_generate($last_code, 8, 3);
-                    $data = array('memo' => $memo, 'total' => $total, 'type' => 'activation_member', 'status' => 'pending', 'ledgers_id' => $ledger_id, 'customers_id' => $request->input('id'), 'agents_id' => $request->input('agents_id'), 'payment_type' => 'point', 'code' => $order_code, 'register' => $register, 'bv_activation_amount' => $bv_nett, 'activation_type_id_old' => $activation_type_id_old, 'customers_activation_id' => $request->input('id'));
+                    $data = array('memo' => $memo, 'total' => $total, 'type' => 'activation_member', 'status' => 'pending', 'ledgers_id' => $ledger_id, 'customers_id' => $request->input('id'), 'agents_id' => $request->input('agents_id'), 'payment_type' => 'point', 'code' => $order_code, 'register' => $register, 'bv_activation_amount' => $bv_nett, 'activation_type_id_old' => $activation_type_id_old, 'customers_activation_id' => $request->input('id'), 'activation_type_id' => $package_upgrade_type_id, 'bv_total' => $bv_total);
                     $order = Order::create($data);
                     //set order products
                     for ($i = 0; $i < $count_cart; $i++) {
@@ -1506,8 +1868,8 @@ class CustomersApiController extends Controller
                     //$member->parent_id = $parent_id;
                     //$member->activation_at = $activation_at;
                     //$member->status = 'active';
-                    $member->activation_type_id = $package_upgrade_type_id;
-                    $member->save();
+                    //$member->activation_type_id = $package_upgrade_type_id;
+                    //$member->save();
                     /*set order*/
                     //set def
                     $referal_id = $request->input('id');
@@ -1519,11 +1881,13 @@ class CustomersApiController extends Controller
                     $com_id = $com_row[0]->id;
 
                     $ref2_id = 0;
-                    if (!empty($ref2_row) && $ref2_row->ref_id > 0) {
-                        $ref2_id = $ref2_row->id;
-                    }
+                    // if (!empty($ref2_row) && $ref2_row->ref_id > 0) {
+                    //     $ref2_id = $ref2_row->id;
+                    // }
 
-                    ProcessPairing::dispatch($order->id, $member->ref_id, $bv_total, $bvcv_row[0]->amount, $ref1_fee_point_sale, $ref1_fee_point_upgrade, $ref2_fee_point_sale, $ref2_fee_point_upgrade, $ref1_flush_out, $ledger_id, $cba2, $cbmart, $points_fee_id, $points_upg_id, $ref2_id, $memo, $member_get_flush_out, 0, 0);
+                    //insert pairing info
+                    $data = array('order_id' => $order->id, 'ref_id' => $member->ref_bin_id, 'bv_total' => $bv_total, 'bvcv_amount' => $bvcv_row[0]->amount, 'ref1_fee_point_sale' => $ref1_fee_point_sale, 'ref1_fee_point_upgrade' => $ref1_fee_point_upgrade, 'ref2_fee_point_sale' => $ref2_fee_point_sale, 'ref2_fee_point_upgrade' => $ref2_fee_point_upgrade, 'ref1_flush_out' => $ref1_flush_out, 'ledger_id' => $ledger_id, 'cba2' => $cba2, 'cbmart' => $cbmart, 'points_fee_id' => $points_fee_id, 'points_upg_id' => $points_upg_id, 'ref2_id' => $ref2_id, 'memo' => $memo, 'member_get_flush_out' => $member_get_flush_out, 'package_type' => 0, 'ref_fee_lev' => 0, 'customer_id' => $member->id);
+                    $pairinginfo = PairingInfo::create($data);
 
                     //set trf points from member to Usadha Bhakti (pending points)
                     $order->points()->attach($points_id, ['amount' => $total, 'type' => 'D', 'status' => 'onhand', 'memo' => 'Penambahan Poin dari (Pending Order) ' . $memo, 'customers_id' => $com_id]);
@@ -1919,7 +2283,17 @@ class CustomersApiController extends Controller
                 ], 401);
             } else {
                 //set member
-                $member = Member::find($request->input('id'));
+                $member = CustomerApi::where('id', $request->input('id'))->with(['activations', 'refferal', 'provinces', 'city'])->first();
+
+                //check up status
+                // $status_list_upline = $this->status_list_upline($member->slot_x, $member->slot_y);
+                // if ($status_list_upline['status'] == 0) {
+                //     return response()->json([
+                //         'success' => false,
+                //         'message' => 'Register Gagal, Status Upline masih ada yang belum activ.',
+                //     ], 401);
+                // }
+
                 //get point member
                 $points_id = 1;
                 $points_upg_id = 2;
@@ -1971,7 +2345,7 @@ class CustomersApiController extends Controller
                 }
 
                 //compare total to point belanja
-                if ($points_balance >= $total && $member->status == 'pending') {
+                if ($points_balance >= $total && $member->status == 'pending') {                    
                     //init
                     $register = date("Y-m-d");
                     $memo = 'Aktivasi Member ' . $member->code . "-" . $member->name;
@@ -2036,21 +2410,21 @@ class CustomersApiController extends Controller
                     if (($bv_nett > $min_plat) && $package_activation_type_id < 4) {
                         $ref1_fee_point_sale_def = ($rsbv_g1_percen / 100) * ($sbv_percen / 100) * $min_plat;
                     }
-                    //ref 2 package fee
-                    $sbv_percen = $package_network_row[0]->sbv;
-                    $rsbv_g2_percen = $package_network_row[0]->rsbv_g2;
-                    $ref2_fee_point_sale_def = ($rsbv_g2_percen / 100) * ($sbv_percen / 100) * $bv_nett;
-                    if (($bv_nett > $min_plat) && $package_activation_type_id < 4) {
-                        $ref2_fee_point_sale_def = ($rsbv_g2_percen / 100) * ($sbv_percen / 100) * $min_plat;
-                    }
+                    // //ref 2 package fee
+                    // $sbv_percen = $package_network_row[0]->sbv;
+                    // $rsbv_g2_percen = $package_network_row[0]->rsbv_g2;
+                    // $ref2_fee_point_sale_def = ($rsbv_g2_percen / 100) * ($sbv_percen / 100) * $bv_nett;
+                    // if (($bv_nett > $min_plat) && $package_activation_type_id < 4) {
+                    //     $ref2_fee_point_sale_def = ($rsbv_g2_percen / 100) * ($sbv_percen / 100) * $min_plat;
+                    // }
 
                     //ref 1
                     $ref1_fee_point_sale = 0;
                     $ref1_fee_point_upgrade = 0;
                     $ref1_flush_out = 0;
-                    $ref1_row = Member::find($member->ref_id);
+                    $ref1_row = Member::find($member->ref_bin_id);
                     //ref 1 row
-                    if (!empty($ref1_row) && $ref1_row->ref_id > 0) {
+                    if (!empty($ref1_row) && $ref1_row->ref_bin_id > 1) {
                         $ref1_fee_row = NetworkFee::select('*')
                             ->Where('type', '=', 'activation')
                             ->Where('activation_type_id', '=', $ref1_row->activation_type_id)
@@ -2059,10 +2433,10 @@ class CustomersApiController extends Controller
                         $rsbv_g1_percen = $ref1_fee_row[0]->rsbv_g1;
                         $ref1_fee_point_sale = ($rsbv_g1_percen / 100) * ($sbv1_percen / 100) * $bv_nett;
                         if (($bv_nett > $min_plat) && $ref1_row->activation_type_id < 4) {
-                            $ref1_fee_point_sale = ($rsbv_g1_percen / 100) * ($sbv1_percen / 100) * $min_plat;
+                            //$ref1_fee_point_sale = ($rsbv_g1_percen / 100) * ($sbv1_percen / 100) * $min_plat;
                         }
                         if ($ref1_fee_point_sale_def > $ref1_fee_point_sale) {
-                            $ref1_flush_out = $ref1_fee_point_sale_def - $ref1_fee_point_sale;
+                            //$ref1_flush_out = $ref1_fee_point_sale_def - $ref1_fee_point_sale;
                         }
                     }
 
@@ -2070,24 +2444,24 @@ class CustomersApiController extends Controller
                     $ref2_fee_point_sale = 0;
                     $ref2_fee_point_upgrade = 0;
                     $member_get_flush_out = 0;
-                    $ref2_row = Member::find($ref1_row->ref_id);
-                    //ref 2 row
-                    if (!empty($ref2_row) && $ref2_row->ref_id > 0) {
-                        $ref2_fee_row = NetworkFee::select('*')
-                            ->Where('type', '=', 'activation')
-                            ->Where('activation_type_id', '=', $ref2_row->activation_type_id)
-                            ->get();
-                        $sbv2_percen = $ref2_fee_row[0]->sbv;
-                        $rsbv_g2_percen = $ref2_fee_row[0]->rsbv_g2;
-                        $ref2_fee_point_sale = ($rsbv_g2_percen / 100) * ($sbv2_percen / 100) * $bv_nett;
-                        if (($bv_nett > $min_plat) && $ref2_row->activation_type_id < 4) {
-                            $ref2_fee_point_sale = ($rsbv_g2_percen / 100) * ($sbv2_percen / 100) * $min_plat;
-                        }
-                        $member_get_flush_out = $ref2_row->id;
-                        if ($ref1_row->activation_type_id >= $ref2_row->activation_type_id) {
-                            $member_get_flush_out = 0;
-                        }
-                    }
+                    // $ref2_row = Member::find($ref1_row->ref_id);
+                    // //ref 2 row
+                    // if (!empty($ref2_row) && $ref2_row->ref_id > 0) {
+                    //     $ref2_fee_row = NetworkFee::select('*')
+                    //         ->Where('type', '=', 'activation')
+                    //         ->Where('activation_type_id', '=', $ref2_row->activation_type_id)
+                    //         ->get();
+                    //     $sbv2_percen = $ref2_fee_row[0]->sbv;
+                    //     $rsbv_g2_percen = $ref2_fee_row[0]->rsbv_g2;
+                    //     $ref2_fee_point_sale = ($rsbv_g2_percen / 100) * ($sbv2_percen / 100) * $bv_nett;
+                    //     if (($bv_nett > $min_plat) && $ref2_row->activation_type_id < 4) {
+                    //         $ref2_fee_point_sale = ($rsbv_g2_percen / 100) * ($sbv2_percen / 100) * $min_plat;
+                    //     }
+                    //     $member_get_flush_out = $ref2_row->id;
+                    //     if ($ref1_row->activation_type_id >= $ref2_row->activation_type_id) {
+                    //         $member_get_flush_out = 0;
+                    //     }
+                    // }
                     if ($member_get_flush_out == 0) {
                         $ref1_flush_out = 0;
                     }
@@ -2096,7 +2470,7 @@ class CustomersApiController extends Controller
                     $warehouses_id = 1;
                     $last_code = $this->get_last_code('order-agent');
                     $order_code = acc_code_generate($last_code, 8, 3);
-                    $data = array('memo' => $memo, 'total' => $total, 'type' => 'activation_member', 'status' => 'pending', 'ledgers_id' => $ledger_id, 'customers_id' => $request->input('id'), 'agents_id' => $request->input('agents_id'), 'payment_type' => 'point', 'code' => $order_code, 'register' => $register, 'bv_activation_amount' => $bv_nett, 'customers_activation_id' => $request->input('id'));
+                    $data = array('memo' => $memo, 'total' => $total, 'type' => 'activation_member', 'status' => 'pending', 'ledgers_id' => $ledger_id, 'customers_id' => $request->input('id'), 'agents_id' => $request->input('agents_id'), 'payment_type' => 'point', 'code' => $order_code, 'register' => $register, 'bv_activation_amount' => $bv_nett, 'customers_activation_id' => $request->input('id'), 'bv_total' => $bv_total);
                     $order = Order::create($data);
                     //set order products
                     for ($i = 0; $i < $count_cart; $i++) {
@@ -2126,15 +2500,27 @@ class CustomersApiController extends Controller
                     }
 
                     /*update member */
+                    //check if slot is null
+                    if($member->slot_x<1){
+                        //get auto slot
+                        //get x & y referal
+                        $reff_user = CustomerApi::where('id', $member->ref_bin_id)->first();
+                        $slot_arr = array();
+                        $get_slot_empty = $this->get_slot_empty($reff_user->slot_x, $reff_user->slot_y, 1, $slot_arr);
+                        $member->slot_x = $get_slot_empty['ex'];
+                        $member->slot_y = $get_slot_empty['ey'];
+                        }
                     $parent_id = $this->set_parent($member->ref_id);
                     $activation_at = date('Y-m-d H:i:s');
                     $member->parent_id = $parent_id;
                     $member->activation_at = $activation_at;
-                    $member->status = 'active';
+                    $member->status = 'pending';
                     $member->activation_type_id = $package_activation_type_id;
                     $member->name = $request->input('name');
-                    $member->phone = $request->input('phone');
-                    $member->email = $request->input('email');
+                    if ($member->id == $member->owner_id) {
+                        $member->phone = $request->input('phone');
+                        $member->email = $request->input('email');
+                    }
                     $member->address = $request->input('address');
                     $member->save();
                     /*set order*/
@@ -2148,11 +2534,13 @@ class CustomersApiController extends Controller
                     $com_id = $com_row[0]->id;
 
                     $ref2_id = 0;
-                    if (!empty($ref2_row) && $ref2_row->ref_id > 0) {
-                        $ref2_id = $ref2_row->id;
-                    }
+                    // if (!empty($ref2_row) && $ref2_row->ref_id > 0) {
+                    //     $ref2_id = $ref2_row->id;
+                    // }
 
-                    ProcessPairing::dispatch($order->id, $member->ref_id, $bv_total, $bvcv_row[0]->amount, $ref1_fee_point_sale, $ref1_fee_point_upgrade, $ref2_fee_point_sale, $ref2_fee_point_upgrade, $ref1_flush_out, $ledger_id, $cba2, $cbmart, $points_fee_id, $points_upg_id, $ref2_id, $memo, $member_get_flush_out, 0, 0);
+                    //insert pairing info
+                    $data = array('order_id' => $order->id, 'ref_id' => $member->ref_bin_id, 'bv_total' => $bv_total, 'bvcv_amount' => $bvcv_row[0]->amount, 'ref1_fee_point_sale' => $ref1_fee_point_sale, 'ref1_fee_point_upgrade' => $ref1_fee_point_upgrade, 'ref2_fee_point_sale' => $ref2_fee_point_sale, 'ref2_fee_point_upgrade' => $ref2_fee_point_upgrade, 'ref1_flush_out' => $ref1_flush_out, 'ledger_id' => $ledger_id, 'cba2' => $cba2, 'cbmart' => $cbmart, 'points_fee_id' => $points_fee_id, 'points_upg_id' => $points_upg_id, 'ref2_id' => $ref2_id, 'memo' => $memo, 'member_get_flush_out' => $member_get_flush_out, 'package_type' => 0, 'ref_fee_lev' => 0, 'customer_id' => $member->id);
+                    $pairinginfo = PairingInfo::create($data);
 
                     //set trf points from member to Usadha Bhakti (pending points)
                     $order->points()->attach($points_id, ['amount' => $total, 'type' => 'D', 'status' => 'onhand', 'memo' => 'Penambahan Poin dari (Pending Order) ' . $memo, 'customers_id' => $com_id]);

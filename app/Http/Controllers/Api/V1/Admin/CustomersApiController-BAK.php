@@ -41,6 +41,58 @@ class CustomersApiController extends Controller
         $this->onesignal_client = new OneSignalClient(env('ONESIGNAL_APP_ID_MEMBER'), env('ONESIGNAL_REST_API_KEY_MEMBER'), '');
     }
 
+    public function slotTree(Request $request)
+    {
+        $slot_prev_x = -1;
+        $slot_prev_y = -1;
+        $user = auth()->user();
+        if ($request->slot_x) {
+            $slot_init_x = $request->slot_x;
+            $slot_init_y = $request->slot_y;
+            if ($slot_init_x > $user->slot_x) {
+                $slot_prev_x = $slot_init_x - 3;
+                $slot_prev_y = ceil($slot_init_y / 2);
+                $slot_prev_y = ceil($slot_prev_y / 2);
+                $slot_prev_y = ceil($slot_prev_y / 2);
+            }
+        } else {
+            $slot_init_x = $user->slot_x;
+            $slot_init_y = $user->slot_y;
+        }
+        $slot_arr = array();
+        $slot_arr[0][0]['x'] = $slot_init_x;
+        $slot_arr[0][0]['y'] = $slot_init_y;
+        $slot_customer = CustomerApi::select('id', 'activation_type_id', 'code', 'name', 'status')->where("slot_x", $slot_init_x)->where("slot_y", $slot_init_y)->with('activations')->first();
+        if ($slot_customer) {
+            $slot_arr[0][0]['data'] = $slot_customer;
+            $top_id = $slot_customer->id;
+        } else {
+            $slot_arr[0][0]['data'] = '';
+            $top_id = 0;
+        }
+        for ($i = 1; $i <= 3; $i++) {
+            $slot_arr[$i][0]['x'] = $slot_arr[$i - 1][0]['x'] + 1;
+            $slot_arr[$i][0]['y'] = ($slot_arr[$i - 1][0]['y'] * 2) - 1;
+            $slot_customer = CustomerApi::select('activation_type_id', 'code', 'name', 'status')->where("slot_x", $slot_arr[$i][0]['x'])->where("slot_y", $slot_arr[$i][0]['y'])->with('activations')->first();
+            if ($slot_customer) {
+                $slot_arr[$i][0]['data'] = $slot_customer;
+            } else {
+                $slot_arr[$i][0]['data'] = '';
+            }
+            for ($j = 1; $j < pow(2, $i); $j++) {
+                $slot_arr[$i][$j]['x'] = $slot_arr[$i][$j - 1]['x'];
+                $slot_arr[$i][$j]['y'] = ($slot_arr[$i][$j - 1]['y']) + 1;
+                $slot_customer = CustomerApi::select('activation_type_id', 'code', 'name', 'status')->where("slot_x", $slot_arr[$i][$j]['x'])->where("slot_y", $slot_arr[$i][$j]['y'])->with('activations')->first();
+                if ($slot_customer) {
+                    $slot_arr[$i][$j]['data'] = $slot_customer;
+                } else {
+                    $slot_arr[$i][$j]['data'] = '';
+                }
+            }
+        }
+        return view('admin.reposisi.tree', compact('slot_arr', 'top_id', 'slot_prev_x', 'slot_prev_y'));
+    }
+    
     public function logsUpdate($id)
     {
         $logs = LogNotif::find($id);

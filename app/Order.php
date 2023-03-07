@@ -33,6 +33,9 @@ class Order extends Model
         'customers_activation_id',
         'activation_type_id_old',
         'bv_ro_amount',
+        'activation_type_id',
+        'bv_total',
+        'bv_automaintain_amount',
     ];
 
     public function customers()

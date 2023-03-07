@@ -37,9 +37,11 @@ class TopupsApiController extends Controller
             ->Where('code', '=', 'BVPO')
             ->first();
 
-        $balance = Order::where('customers_activation_id', '=', $id)
+            $date_start_bin = "2022-11-10"." 00:00:01";
+            $balance = Order::where('customers_activation_id', '=', $id)
             ->where('type', '=', 'activation_member')
             ->where('status', '=', 'approved')
+            ->where('created_at', '>=', $date_start_bin)
             ->sum('bv_activation_amount');
 
         //Check if balance found or not.

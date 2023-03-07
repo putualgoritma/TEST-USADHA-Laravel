@@ -201,6 +201,16 @@ Route::group(['prefix' => 'admin', 'as' => 'admin.', 'namespace' => 'Admin', 'mi
     Route::get('settings', 'SettingsController@index')->name('settings.index');
     Route::put('settings-update', 'SettingsController@update')->name('settings.update');
 
+    //tree
+    Route::get('trees', 'TreeController@index')->name('trees.index');
+    Route::get('tree-modal', 'TreeController@treeModal')->name('trees.modal');
+    Route::get('tree-view', 'TreeController@tree')->name('trees.view');
+
+    // careers
+    Route::resource('careers', 'CareersController');
+    Route::get('career-member', 'CareersController@showMember')->name('careers.showMember');
+    Route::get('career-member-list', 'CareersController@listMember')->name('careers.listMember');
+
 });
 
 Route::group(['prefix' => 'admin', 'as' => 'midtrans.', 'namespace' => 'Admin'], function () {

@@ -17,6 +17,12 @@ class Career extends Model
         'customer_id',
         'careertype_id',
         'current_ro_amount',
+        'status',
     ];   
+
+    public function careertypes()
+    {
+        return $this->belongsTo(Careertype::class, 'careertype_id')->select('id', 'name');
+    }
     
 }

@@ -15,7 +15,11 @@ class TestController extends Controller
 
     public function test(Request $request)
     {
-        return env('ADMIN_ACC_TRSF');
+        $auto_maintain=$this->auto_maintain($request->order_id, $request->customer_id, $request->bv_amount, $request->points_fee_id, 0);
+        echo $auto_maintain;
+        /*
+        $pairing_bin=$this->pairing_bin($request->order_id, $request->customer_id, $request->bv_amount_inc, $request->points_fee_id);
+        //return env('ADMIN_ACC_TRSF');
         // ProcessPairing::dispatch($request->account_id,$request->code);
         /*
         $careertypes = Careertype::with('careertypes')->with('activationtypes')->find($request->careertype_level_id);

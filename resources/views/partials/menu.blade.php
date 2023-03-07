@@ -70,6 +70,25 @@
                     {{ trans('global.network.title') }}
                 </a>
                 <ul class="nav-dropdown-items">
+
+                <li class="nav-item">
+                    <a href="{{ route("admin.trees.index") }}" class="nav-link {{ request()->is('admin/trees') || request()->is('admin/trees/*') ? 'active' : '' }}">
+                        <i class="fas fa-tree nav-icon">
+
+                        </i>
+                        {{ trans('global.tree.title') }}
+                    </a>
+                </li>
+                
+                <li class="nav-item">
+                    <a href="{{ route("admin.careers.index") }}" class="nav-link {{ request()->is('admin/careers') || request()->is('admin/careers/*') ? 'active' : '' }}">
+                        <i class="fas fa-users-cog nav-icon">
+
+                        </i>
+                        {{ trans('global.career.title') }}
+                    </a>
+                </li>
+
                 <li class="nav-item">
                     <a href="{{ route("admin.careertypes.index") }}" class="nav-link {{ request()->is('admin/careertypes') || request()->is('admin/careertypes/*') ? 'active' : '' }}">
                         <i class="fas fa-users-cog nav-icon">

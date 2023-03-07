@@ -35,19 +35,19 @@
                 </p>
             </div>
 
-            <div class="form-group {{ $errors->has('customers_id') ? 'has-error' : '' }}">
-                <label for="customers_id">{{ trans('global.member.fields.customers_id') }}*</label>
-                <select name="customers_id" class="form-control">
+            <div class="form-group {{ $errors->has('ref_bin_id') ? 'has-error' : '' }}">
+                <label for="ref_bin_id">{{ trans('global.member.fields.customers_id') }}*</label>
+                <select name="ref_bin_id" class="form-control">
                     <option value="">-- choose customer --</option>
                     @foreach ($referals as $customer)
-                        <option value="{{ $customer->id }}"{{(old('customers_id', $member->ref_id) == $customer->id ? 'selected' : '')}}>
+                        <option value="{{ $customer->id }}"{{(old('ref_bin_id', $member->ref_bin_id) == $customer->id ? 'selected' : '')}}>
                         {{ $customer->code }}-{{ $customer->name }} {{ $customer->last_name }}
                         </option>
                     @endforeach
                 </select>
-                @if($errors->has('customers_id'))
+                @if($errors->has('ref_bin_id'))
                     <em class="invalid-feedback">
-                        {{ $errors->first('customers_id') }}
+                        {{ $errors->first('ref_bin_id') }}
                     </em>
                 @endif
                 <p class="helper-block">

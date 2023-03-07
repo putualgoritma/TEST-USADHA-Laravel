@@ -10,6 +10,7 @@ use App\Http\Requests\StoreMemberRegRequest;
 use App\Mail\MemberEmail;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Database\QueryException;
+use Validator;
 
 class MembersController extends Controller
 {
@@ -46,7 +47,7 @@ class MembersController extends Controller
         $code=acc_code_generate($last_code,8,3);
         $password=passw_gnr(7);
         $password_ency=bcrypt($password);
-        $data=array_merge($request->all(), ['type' => 'member','status' => 'pending','code' => $code,'password' => $password_ency,'parent_id' => $request->input('customers_id'),'ref_id' => $request->input('customers_id')]);    
+        $data=array_merge($request->all(), ['type' => 'member','status' => 'pending','code' => $code,'password' => $password_ency,'parent_id' => $request->input('customers_id'),'ref_id' => $request->input('customers_id'),'ref_bin_id' => $request->input('customers_id')]);    
         
         //check ref_id
         $ref_row = Member::find($request->input('customers_id'));
@@ -55,6 +56,14 @@ class MembersController extends Controller
                 'success' => false,
                 'message' => 'Register Gagal, Status Referal belum Activasi.',
             ], 401);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'phone' => 'required|unique:customers|regex:/(0)[0-9]{10}/',
+            'email' => 'required|email|unique:customers', 
+        ]);           
+        if ($validator->fails()) {
+            return back()->withError('Duplicate Email or Phone Number ' . $request->input('email'))->withInput();
         }
 
         try {

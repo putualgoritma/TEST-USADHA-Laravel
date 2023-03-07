@@ -180,6 +180,7 @@ class MartregistersController extends Controller
                 $data['password'] = $password;
                 $data['customer_agent_id'] = $martregister->customer_id;
                 $data['ref_id'] = $martregister->referal_id;
+                $data['ref_bin_id'] = $martregister->referal_id;
                 $data['parent_id'] = $martregister->referal_id;
                 $data['agent_type'] = 'minimart';
                 $data['email'] = $martregister->email;

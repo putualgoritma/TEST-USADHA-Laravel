@@ -34,6 +34,7 @@ class NetworkFee extends Model
         'created_at',
         'updated_at',
         'deleted_at',
-        'bv_min_pairing'       
+        'bv_min_pairing',
+        'sbv2',      
     ];
 }

@@ -29,7 +29,7 @@
 @endcan
 @endif
 
-@if($row->type =='sale' && $row->status =='pending' && $crudRoutePart=='orders')
+@if(($row->type =='sale' || $row->type =='stock_trsf') && $row->status =='pending' && $crudRoutePart=='orders')
 @can($viewGate)
 <a class="btn btn-xs btn-success" href="{{ route('admin.' . $crudRoutePart . '.approved', $row->id) }}">
         Setujui

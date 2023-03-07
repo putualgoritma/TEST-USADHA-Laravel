@@ -39,12 +39,18 @@ class Customer extends Model
         'province_id',
         'city_id',
         'customer_agent_id',
-        'agent_type'
+        'agent_type',
+        'ref_bin_id',
     ];
 
     public function activations()
     {
         return $this->belongsTo(Activation::class, 'activation_type_id')->select('id', 'name');
+    }
+
+    public function refferal()
+    {
+        return $this->belongsTo(CustomerApi::class, 'ref_bin_id')->select('id', 'code', 'name');
     }
 
         

@@ -778,6 +778,8 @@ return [
             'cba2_helper' => '',
             'bv_min_pairing' => 'Minimal BV Pairing',
             'bv_min_pairing_helper' => '',
+            'sbv2' => 'Komisi Kedalaman Tertentu dari BV (percent)',
+            'sbv2_helper' => '',
         ],
     ],
     'orderpoint' => [
@@ -1110,12 +1112,28 @@ return [
             'ref_downline_id_helper' => '',
             'team_level' => 'Peringkat Team',
             'team_level_helper' => '',
+            'auto_maintain_bv' => 'Auto Maintain BV',
+            'auto_maintain_bv_helper' => '',
+            'fee_am' => 'Komisi Auto Maintain',
+            'fee_am_helper' => '',
             'created_at' => 'Created at',
             'created_at_helper' => '',
             'updated_at' => 'Updated at',
             'updated_at_helper' => '',
             'deleted_at' => 'Deleted at',
             'deleted_at_helper' => '',
+        ],
+    ],
+    'career' => [
+        'title' => 'Jenjang Karir',
+        'title_singular' => 'Jenjang Karir',
+        'fields' => [
+            'id' => 'ID',
+            'id_helper' => '',
+            'name' => 'Jenjang Karir',
+            'name_helper' => '', 
+            'careertype_id' => 'Pilih Jenjang Karir', 
+            'careertype_id_helper' => '',         
         ],
     ],
     'setting' => [
@@ -1127,5 +1145,8 @@ return [
             'member_activ' => 'Activasi & Upgrade Member',
             'member_activ_helper' => '',       
         ],
+    ],
+    'tree' => [
+        'title' => 'Pohon Jaringan',
     ],
 ];

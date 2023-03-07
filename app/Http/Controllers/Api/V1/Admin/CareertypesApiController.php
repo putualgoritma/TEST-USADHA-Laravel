@@ -43,21 +43,6 @@ class CareertypesApiController extends Controller
         $members['get_member_down3'] = $this->get_member_down($request->customer_id, 3);
         $members['get_member_down4'] = $this->get_member_down($request->customer_id, 4);
 
-        //check if level change
-        if (!empty($career)) {
-            if ($career->careertype_id < $members['level_checked']) {
-                //update career
-                $data = ['customer_id' => $request->customer_id, 'careertype_id' => $members['level_checked'], 'current_ro_amount' => $members['member_ro']];
-                $career_upd = Career::create($data);
-            }
-        } else {
-            if ($members['level_checked'] > 0) {
-                //insert career
-                $data = ['customer_id' => $request->customer_id, 'careertype_id' => $members['level_checked'], 'current_ro_amount' => $members['member_ro']];
-                $career_crt = Career::create($data);
-            }
-        }
-
         $careertypes = Careertype::with('careertypes')
             ->where('id', '>', $career_selected_id)
             ->with('activationtypes')
@@ -131,6 +116,25 @@ class CareertypesApiController extends Controller
                 $careertypes[$key]->level_status = 0;
             }
 
+        }
+
+        //check if level change
+        if (!empty($career)) {
+            if ($career->careertype_id < $members['level_checked']) {
+                //close all related
+                Career::where('customer_id', $request->customer_id)->update(['status' => 'close']);
+                //update career
+                $data = ['customer_id' => $request->customer_id, 'careertype_id' => $members['level_checked'], 'current_ro_amount' => $members['member_ro']];
+                $career_upd = Career::create($data);
+            }
+        } else {
+            if ($members['level_checked'] > 0) {
+                //close all related
+                Career::where('customer_id', $request->customer_id)->update(['status' => 'close']);
+                //insert career
+                $data = ['customer_id' => $request->customer_id, 'careertype_id' => $members['level_checked'], 'current_ro_amount' => $members['member_ro']];
+                $career_crt = Career::create($data);
+            }
         }
 
         //Check if history found or not.
